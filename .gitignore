@@ -1,0 +1,28 @@
+# Build output
+**/bin/
+**/obj/
+**/out/
+
+# User-specific files
+*.user
+*.rsuser
+*.suo
+*.userosscache
+
+# IDE settings
+.vs/
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs and temp files
+*.log
+*.tmp
+*.temp
+
+# Local tooling folders
+.azure/
+.aspire/

@@ -1,0 +1,20 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Solace.ServiceDefaults\Solace.ServiceDefaults.csproj" />
+    <ProjectReference Include="..\Solace.Shared\Solace.Shared.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SolaceSystems.Solclient.Messaging" Version="10.28.3" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
+    <UserSecretsId>c369aed9-0d10-4741-972d-b9d00ab34238</UserSecretsId>
+  </PropertyGroup>
+
+</Project>

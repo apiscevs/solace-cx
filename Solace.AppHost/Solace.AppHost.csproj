@@ -1,0 +1,16 @@
+<Project Sdk="Aspire.AppHost.Sdk/13.1.0">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Solace.Publisher\Solace.Publisher.csproj" />
+    <ProjectReference Include="..\Solace.Subscriber\Solace.Subscriber.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <UserSecretsId>2c4363ec-5884-4d0a-a6bc-3f56362e90f6</UserSecretsId>
+  </PropertyGroup>
+
+</Project>

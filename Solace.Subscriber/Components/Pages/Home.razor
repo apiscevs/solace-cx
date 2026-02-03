@@ -1,0 +1,115 @@
+@page "/"
+@implements IDisposable
+@inject ISolaceSubscriberClient SubscriberClient
+@inject MessageHistory MessageHistory
+
+<PageTitle>Solace Subscriber</PageTitle>
+
+<div class="subscriber-page">
+    <header class="hero">
+        <p class="kicker">Solace PubSub+ / Subscriber</p>
+        <h1>Watch topics in real time.</h1>
+        <p class="lede">Connected events stream in automatically while subscription health stays visible.</p>
+    </header>
+
+    <section class="grid">
+        <article class="panel connection">
+            <h2>Connection Monitor</h2>
+            <p class="status @StatusClass">@Connection.Status</p>
+            @if (!string.IsNullOrWhiteSpace(Connection.Details))
+            {
+                <p class="details">@Connection.Details</p>
+            }
+
+            <div class="field-grid">
+                <label>
+                    Broker URL
+                    <input value="@SubscriberClient.Options.Host" readonly />
+                </label>
+                <label>
+                    Message VPN
+                    <input value="@SubscriberClient.Options.VpnName" readonly />
+                </label>
+                <label>
+                    Client Username
+                    <input value="@SubscriberClient.Options.Username" readonly />
+                </label>
+                <label>
+                    Subscription Topic
+                    <input value="@SubscriberClient.SubscriptionTopic" readonly />
+                </label>
+            </div>
+        </article>
+
+        <article class="panel stream">
+            <div class="panel-top-row">
+                <h2>Inbound Message Stream</h2>
+                <button type="button" class="ghost" @onclick="ClearHistory">Clear</button>
+            </div>
+
+            @if (_messages.Count == 0)
+            {
+                <p class="empty">No messages received yet.</p>
+            }
+            else
+            {
+                <ul>
+                    @foreach (var message in _messages)
+                    {
+                        <li class="@CardClass(message)">
+                            <div class="meta">
+                                <span>@message.Direction</span>
+                                <span>@message.TimestampUtc.ToLocalTime().ToString("HH:mm:ss")</span>
+                            </div>
+                            <p class="topic">@message.Topic</p>
+                            <p class="payload">@message.Payload</p>
+                            <p class="details">@message.Details</p>
+                        </li>
+                    }
+                </ul>
+            }
+        </article>
+    </section>
+</div>
+
+@code {
+    private IReadOnlyList<MessageRecord> _messages = [];
+
+    private ConnectionSnapshot Connection => SubscriberClient.Connection;
+    private string StatusClass => Connection.IsConnected ? "online" : "offline";
+
+    protected override void OnInitialized()
+    {
+        _messages = MessageHistory.Snapshot;
+
+        MessageHistory.Changed += OnHistoryChanged;
+        SubscriberClient.ConnectionChanged += OnConnectionChanged;
+    }
+
+    public void Dispose()
+    {
+        MessageHistory.Changed -= OnHistoryChanged;
+        SubscriberClient.ConnectionChanged -= OnConnectionChanged;
+    }
+
+    private void ClearHistory() => MessageHistory.Clear();
+
+    private static string CardClass(MessageRecord record)
+    {
+        return record.Success ? "ok" : "fail";
+    }
+
+    private void OnHistoryChanged()
+    {
+        _ = InvokeAsync(() =>
+        {
+            _messages = MessageHistory.Snapshot;
+            StateHasChanged();
+        });
+    }
+
+    private void OnConnectionChanged()
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+}

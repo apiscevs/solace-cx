@@ -1,0 +1,152 @@
+@page "/"
+@implements IDisposable
+@inject ISolacePublisherClient PublisherClient
+@inject MessageHistory MessageHistory
+
+<PageTitle>Solace Publisher</PageTitle>
+
+<div class="publisher-page">
+    <header class="hero">
+        <p class="kicker">Solace PubSub+ / Publisher</p>
+        <h1>Broadcast messages with confidence.</h1>
+        <p class="lede">Compose topic messages, send instantly, and keep an observable outbound timeline.</p>
+    </header>
+
+    <section class="grid">
+        <article class="panel connection">
+            <h2>Establish Connection</h2>
+            <p class="status @StatusClass">@Connection.Status</p>
+            @if (!string.IsNullOrWhiteSpace(Connection.Details))
+            {
+                <p class="details">@Connection.Details</p>
+            }
+
+            <div class="field-grid">
+                <label>
+                    Broker URL
+                    <input value="@PublisherClient.Options.Host" readonly />
+                </label>
+                <label>
+                    Message VPN
+                    <input value="@PublisherClient.Options.VpnName" readonly />
+                </label>
+                <label>
+                    Client Username
+                    <input value="@PublisherClient.Options.Username" readonly />
+                </label>
+            </div>
+        </article>
+
+        <article class="panel composer">
+            <h2>Compose Message</h2>
+            <form @onsubmit="PublishAsync">
+                <label>
+                    Topic
+                    <input @bind="_topic" @bind:event="oninput" placeholder="solace/test/messages" />
+                </label>
+                <label>
+                    Payload
+                    <textarea @bind="_payload" @bind:event="oninput" placeholder="Send JSON, text, or event snippets."></textarea>
+                </label>
+                <button class="send" type="submit" disabled="@_isSending">@ButtonText</button>
+                @if (!string.IsNullOrWhiteSpace(_lastResult))
+                {
+                    <p class="result">@_lastResult</p>
+                }
+            </form>
+        </article>
+
+        <article class="panel timeline">
+            <div class="panel-top-row">
+                <h2>Recent Outbound Events</h2>
+                <button type="button" class="ghost" @onclick="ClearHistory">Clear</button>
+            </div>
+
+            @if (_messages.Count == 0)
+            {
+                <p class="empty">No outbound events yet.</p>
+            }
+            else
+            {
+                <ul>
+                    @foreach (var message in _messages)
+                    {
+                        <li class="@CardClass(message)">
+                            <div class="meta">
+                                <span>@message.Direction</span>
+                                <span>@message.TimestampUtc.ToLocalTime().ToString("HH:mm:ss")</span>
+                            </div>
+                            <p class="topic">@message.Topic</p>
+                            <p class="payload">@message.Payload</p>
+                            <p class="details">@message.Details</p>
+                        </li>
+                    }
+                </ul>
+            }
+        </article>
+    </section>
+</div>
+
+@code {
+    private IReadOnlyList<MessageRecord> _messages = [];
+    private string _topic = string.Empty;
+    private string _payload = "{";
+    private string _lastResult = string.Empty;
+    private bool _isSending;
+
+    private ConnectionSnapshot Connection => PublisherClient.Connection;
+    private string StatusClass => Connection.IsConnected ? "online" : "offline";
+    private string ButtonText => _isSending ? "Publishing..." : "Publish Message";
+
+    protected override void OnInitialized()
+    {
+        _topic = PublisherClient.Options.DefaultPublishTopic;
+        _messages = MessageHistory.Snapshot;
+
+        MessageHistory.Changed += OnHistoryChanged;
+        PublisherClient.ConnectionChanged += OnConnectionChanged;
+    }
+
+    public void Dispose()
+    {
+        MessageHistory.Changed -= OnHistoryChanged;
+        PublisherClient.ConnectionChanged -= OnConnectionChanged;
+    }
+
+    private async Task PublishAsync()
+    {
+        _isSending = true;
+
+        try
+        {
+            var success = await PublisherClient.PublishAsync(_topic, _payload);
+            _lastResult = success ? "Message sent." : "Publish failed. Check status for details.";
+            if (success)
+            {
+                _payload = string.Empty;
+            }
+        }
+        finally
+        {
+            _isSending = false;
+        }
+    }
+
+    private void ClearHistory() => MessageHistory.Clear();
+
+    private string CardClass(MessageRecord record) => record.Success ? "ok" : "fail";
+
+    private void OnHistoryChanged()
+    {
+        _ = InvokeAsync(() =>
+        {
+            _messages = MessageHistory.Snapshot;
+            StateHasChanged();
+        });
+    }
+
+    private void OnConnectionChanged()
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+}
