@@ -13,12 +13,9 @@
 .hero {
     border-radius: 24px;
     padding: 1rem 1.2rem;
-    background:
-        radial-gradient(circle at 82% 20%, rgba(255, 223, 181, 0.75), transparent 45%),
-        linear-gradient(130deg, #fff6ea, #ffe6c7 60%, #f8d6a8);
+    background: linear-gradient(130deg, #fff6ea, #ffe6c7 60%, #f8d6a8);
     border: 1px solid rgba(140, 82, 16, 0.24);
     box-shadow: 0 14px 30px rgba(118, 72, 18, 0.15);
-    animation: reveal 520ms ease;
 }
 
 .kicker {
@@ -54,9 +51,7 @@ h1:focus-visible {
     border-radius: 24px;
     border: 1px solid var(--line);
     background: rgba(255, 255, 255, 0.8);
-    backdrop-filter: blur(2px);
     padding: 1.1rem;
-    animation: rise 520ms ease both;
 }
 
 .panel h2 {
@@ -68,12 +63,10 @@ h1:focus-visible {
 
 .connection {
     grid-column: span 4;
-    animation-delay: 80ms;
 }
 
 .queues {
     grid-column: span 8;
-    animation-delay: 140ms;
 }
 
 .panel-top-row {
@@ -247,27 +240,5 @@ ol {
     .connection,
     .queues {
         grid-column: span 12;
-    }
-}
-
-@keyframes reveal {
-    from {
-        opacity: 0;
-        transform: translateY(8px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-@keyframes rise {
-    from {
-        opacity: 0;
-        transform: translateY(14px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
     }
 }

@@ -13,16 +13,16 @@ function handleReconnectStateChanged(event) {
         reconnectModal.showModal();
     } else if (event.detail.state === "hide") {
         reconnectModal.close();
-    } else if (event.detail.state === "failed") {
-        document.addEventListener("visibilitychange", retryWhenDocumentBecomesVisible);
-    } else if (event.detail.state === "rejected") {
-        location.reload();
+    } else if (event.detail.state === "failed" || event.detail.state === "rejected") {
+        reconnectModal.classList.remove("components-reconnect-show", "components-reconnect-retrying");
+        reconnectModal.classList.add("components-reconnect-failed");
+        if (!reconnectModal.open) {
+            reconnectModal.showModal();
+        }
     }
 }
 
 async function retry() {
-    document.removeEventListener("visibilitychange", retryWhenDocumentBecomesVisible);
-
     try {
         // Reconnect will asynchronously return:
         // - true to mean success
@@ -30,18 +30,17 @@ async function retry() {
         // - exception to mean we didn't reach the server (this can be sync or async)
         const successful = await Blazor.reconnect();
         if (!successful) {
-            // We have been able to reach the server, but the circuit is no longer available.
-            // We'll reload the page so the user can continue using the app as quickly as possible.
             const resumeSuccessful = await Blazor.resumeCircuit();
             if (!resumeSuccessful) {
-                location.reload();
+                reconnectModal.classList.remove("components-reconnect-show", "components-reconnect-retrying");
+                reconnectModal.classList.add("components-reconnect-failed");
             } else {
                 reconnectModal.close();
             }
         }
     } catch (err) {
-        // We got an exception, server is currently unavailable
-        document.addEventListener("visibilitychange", retryWhenDocumentBecomesVisible);
+        reconnectModal.classList.remove("components-reconnect-show");
+        reconnectModal.classList.add("components-reconnect-failed");
     }
 }
 
@@ -49,15 +48,10 @@ async function resume() {
     try {
         const successful = await Blazor.resumeCircuit();
         if (!successful) {
-            location.reload();
+            reconnectModal.classList.remove("components-reconnect-paused");
+            reconnectModal.classList.add("components-reconnect-resume-failed");
         }
     } catch {
         reconnectModal.classList.replace("components-reconnect-paused", "components-reconnect-resume-failed");
-    }
-}
-
-async function retryWhenDocumentBecomesVisible() {
-    if (document.visibilityState === "visible") {
-        await retry();
     }
 }

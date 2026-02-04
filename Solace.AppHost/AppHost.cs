@@ -10,8 +10,8 @@ builder.AddProject<Projects.Solace_Subscriber>("subscriber-a")
     .WithEndpoint("http", endpoint => endpoint.Port = 5238)
     .WithExternalHttpEndpoints();
 
-/*builder.AddProject<Projects.Solace_Subscriber>("subscriber-b")
+builder.AddProject<Projects.Solace_Subscriber>("subscriber-b")
     .WithEndpoint("http", endpoint => endpoint.Port = 5239)
-    .WithExternalHttpEndpoints();*/
+    .WithExternalHttpEndpoints();
 
 builder.Build().Run();
