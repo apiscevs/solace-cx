@@ -13,13 +13,13 @@
 .hero {
     position: relative;
     overflow: hidden;
-    border-radius: 28px;
-    padding: clamp(1.4rem, 2.2vw, 2.4rem);
+    border-radius: 24px;
+    padding: clamp(0.95rem, 1.5vw, 1.4rem);
     background:
         radial-gradient(circle at 82% 18%, rgba(168, 238, 255, 0.62), transparent 46%),
         linear-gradient(125deg, #e9fcff, #cff6ff 58%, #b3eefc);
     border: 1px solid rgba(8, 104, 140, 0.28);
-    box-shadow: 0 24px 48px rgba(12, 84, 111, 0.18);
+    box-shadow: 0 20px 38px rgba(12, 84, 111, 0.16);
     animation: reveal 620ms ease;
 }
 
@@ -33,22 +33,20 @@
 }
 
 h1 {
-    margin: 0.5rem 0 0;
-    font-size: clamp(2rem, 4vw, 3.2rem);
-    line-height: 1.03;
+    margin: 0.45rem 0 0;
+    font-size: clamp(1.55rem, 2.7vw, 2.25rem);
+    line-height: 1.05;
     font-family: "Bricolage Grotesque", sans-serif;
-    max-width: 18ch;
 }
 
-.lede {
-    margin: 0.8rem 0 0;
-    color: var(--ink-soft);
-    font-size: 1rem;
-    max-width: 56ch;
+h1:focus,
+h1:focus-visible {
+    outline: none;
+    box-shadow: none;
 }
 
 .grid {
-    margin-top: 1.2rem;
+    margin-top: 1rem;
     display: grid;
     gap: 1rem;
     grid-template-columns: repeat(12, 1fr);
@@ -97,6 +95,45 @@ h1 {
     margin: 0.35rem 0 0;
     color: var(--ink-soft);
     font-size: 0.88rem;
+}
+
+.action-row {
+    margin-top: 0.85rem;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.45rem;
+}
+
+.action {
+    border: 1px solid rgba(38, 81, 101, 0.3);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.75);
+    color: #20485b;
+    padding: 0.46rem 0.68rem;
+    font-weight: 700;
+    font-size: 0.79rem;
+    cursor: pointer;
+}
+
+.action.connect {
+    background: linear-gradient(110deg, #74d7f2, #4bc0df);
+    color: #153443;
+    border-color: rgba(20, 113, 139, 0.4);
+}
+
+.action.disconnect {
+    background: #eaf5fb;
+}
+
+.action.loss {
+    background: #fff1f1;
+    color: #8d1f1f;
+    border-color: rgba(176, 61, 61, 0.32);
+}
+
+.action:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
 }
 
 .field-grid {
@@ -198,6 +235,14 @@ li.fail {
     .connection,
     .stream {
         grid-column: span 12;
+    }
+
+    .action-row {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .action.loss {
+        grid-column: span 2;
     }
 }
 

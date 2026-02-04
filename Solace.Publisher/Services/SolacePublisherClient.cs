@@ -17,10 +17,11 @@ public sealed class SolacePublisherClient(
 
     private readonly object _sessionSync = new();
     private readonly object _stateSync = new();
+    private readonly SemaphoreSlim _connectionGate = new(1, 1);
 
     private IContext? _context;
     private SolaceSession? _session;
-    private ConnectionSnapshot _connection = new(false, "Not Connected", "Waiting to establish Solace session.");
+    private ConnectionSnapshot _connection = new(false, "Not Connected", "Ready. Use Connect to establish the session.");
     private bool _disposed;
 
     public event Action? ConnectionChanged;
@@ -45,26 +46,162 @@ public sealed class SolacePublisherClient(
         try
         {
             _context = ContextFactory.Instance.CreateContext(new ContextProperties(), null);
-            _session = _context.CreateSession(BuildSessionProperties(), OnMessageReceived, OnSessionEvent);
-            _session.Connect();
-
-            UpdateConnection(true, "Connected", $"Session established at {Options.Host}");
+            UpdateConnection(false, "Not Connected", "Ready. Use Connect to establish the session.");
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Publisher failed to initialize Solace session.");
+            logger.LogError(ex, "Publisher failed to initialize Solace context.");
             UpdateConnection(false, "Connection Error", ex.Message);
 
             history.Add(new MessageRecord(
                 DateTimeOffset.UtcNow,
                 MessageDirection.System,
                 "system/publisher",
-                "Publisher session failed to start.",
+                "Publisher context failed to start.",
                 false,
                 ex.Message));
         }
 
         return Task.CompletedTask;
+    }
+
+    public async Task<bool> ConnectAsync(CancellationToken cancellationToken = default)
+    {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return await Task.FromCanceled<bool>(cancellationToken);
+        }
+
+        await _connectionGate.WaitAsync(cancellationToken);
+
+        try
+        {
+            if (_disposed)
+            {
+                return false;
+            }
+
+            lock (_sessionSync)
+            {
+                if (_session is not null)
+                {
+                    UpdateConnection(true, "Connected", "Session is already active.");
+                    return true;
+                }
+            }
+
+            _context ??= ContextFactory.Instance.CreateContext(new ContextProperties(), null);
+            UpdateConnection(false, "Connecting", $"Trying {Options.Host}");
+
+            SolaceSession? newSession = null;
+            try
+            {
+                newSession = _context.CreateSession(BuildSessionProperties(), OnMessageReceived, OnSessionEvent);
+                newSession.Connect();
+
+                lock (_sessionSync)
+                {
+                    _session = newSession;
+                }
+
+                UpdateConnection(true, "Connected", $"Session established at {Options.Host}");
+                history.Add(new MessageRecord(
+                    DateTimeOffset.UtcNow,
+                    MessageDirection.System,
+                    "system/publisher",
+                    "Connection established.",
+                    true,
+                    Options.Host));
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                newSession?.Dispose();
+
+                logger.LogError(ex, "Publisher failed to connect Solace session.");
+                UpdateConnection(false, "Connection Error", ex.Message);
+
+                history.Add(new MessageRecord(
+                    DateTimeOffset.UtcNow,
+                    MessageDirection.System,
+                    "system/publisher",
+                    "Connection attempt failed.",
+                    false,
+                    ex.Message));
+
+                return false;
+            }
+        }
+        finally
+        {
+            _connectionGate.Release();
+        }
+    }
+
+    public async Task<bool> DisconnectAsync(CancellationToken cancellationToken = default)
+    {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return await Task.FromCanceled<bool>(cancellationToken);
+        }
+
+        await _connectionGate.WaitAsync(cancellationToken);
+
+        try
+        {
+            if (_disposed)
+            {
+                return false;
+            }
+
+            SolaceSession? session;
+            lock (_sessionSync)
+            {
+                session = _session;
+                _session = null;
+            }
+
+            if (session is null)
+            {
+                UpdateConnection(false, "Not Connected", "Session is already closed.");
+                return true;
+            }
+
+            var success = true;
+            var detail = "Session closed by user.";
+
+            try
+            {
+                session.Disconnect();
+            }
+            catch (Exception ex)
+            {
+                success = false;
+                detail = ex.Message;
+                logger.LogWarning(ex, "Publisher disconnect raised an exception.");
+            }
+            finally
+            {
+                session.Dispose();
+            }
+
+            UpdateConnection(false, success ? "Not Connected" : "Disconnect Error", detail);
+
+            history.Add(new MessageRecord(
+                DateTimeOffset.UtcNow,
+                MessageDirection.System,
+                "system/publisher",
+                "Session disconnected.",
+                success,
+                detail));
+
+            return success;
+        }
+        finally
+        {
+            _connectionGate.Release();
+        }
     }
 
     public Task<bool> PublishAsync(string topic, string payload, CancellationToken cancellationToken = default)
@@ -136,6 +273,55 @@ public sealed class SolacePublisherClient(
         }
     }
 
+    public async Task<bool> SimulateConnectionLossAsync(CancellationToken cancellationToken = default)
+    {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return await Task.FromCanceled<bool>(cancellationToken);
+        }
+
+        await _connectionGate.WaitAsync(cancellationToken);
+
+        try
+        {
+            if (_disposed)
+            {
+                return false;
+            }
+
+            SolaceSession? session;
+            lock (_sessionSync)
+            {
+                session = _session;
+                _session = null;
+            }
+
+            if (session is null)
+            {
+                UpdateConnection(false, "Not Connected", "No active session to drop.");
+                return true;
+            }
+
+            // Dispose the session directly to mimic a sudden connection drop.
+            session.Dispose();
+            UpdateConnection(false, "Disconnected", "Simulated unexpected connection loss.");
+
+            history.Add(new MessageRecord(
+                DateTimeOffset.UtcNow,
+                MessageDirection.System,
+                "system/publisher",
+                "Simulated unexpected connection loss.",
+                true,
+                "Session disposed without graceful disconnect."));
+
+            return true;
+        }
+        finally
+        {
+            _connectionGate.Release();
+        }
+    }
+
     public Task StopAsync(CancellationToken cancellationToken)
     {
         Dispose();
@@ -177,8 +363,9 @@ public sealed class SolacePublisherClient(
         context?.Dispose();
 
         CleanupFactory();
-        UpdateConnection(false, "Not Connected", "Publisher session has stopped.");
+        UpdateConnection(false, "Not Connected", "Publisher service stopped.");
 
+        _connectionGate.Dispose();
         _disposed = true;
     }
 
@@ -213,14 +400,14 @@ public sealed class SolacePublisherClient(
         {
             case SessionEvent.UpNotice:
             case SessionEvent.Reconnected:
-                UpdateConnection(true, "Connected", args.Info);
+                UpdateConnection(true, "Connected", string.IsNullOrWhiteSpace(args.Info) ? "Session is active." : args.Info);
                 break;
             case SessionEvent.Reconnecting:
-                UpdateConnection(false, "Reconnecting", args.Info);
+                UpdateConnection(false, "Reconnecting", string.IsNullOrWhiteSpace(args.Info) ? "Broker reconnect in progress." : args.Info);
                 break;
             case SessionEvent.ConnectFailedError:
             case SessionEvent.DownError:
-                UpdateConnection(false, "Disconnected", args.Info);
+                UpdateConnection(false, "Disconnected", string.IsNullOrWhiteSpace(args.Info) ? "Session is down." : args.Info);
                 break;
             case SessionEvent.RejectedMessageError:
                 history.Add(new MessageRecord(

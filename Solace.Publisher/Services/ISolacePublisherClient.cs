@@ -11,5 +11,11 @@ public interface ISolacePublisherClient
 
     ConnectionSnapshot Connection { get; }
 
+    Task<bool> ConnectAsync(CancellationToken cancellationToken = default);
+
+    Task<bool> DisconnectAsync(CancellationToken cancellationToken = default);
+
     Task<bool> PublishAsync(string topic, string payload, CancellationToken cancellationToken = default);
+
+    Task<bool> SimulateConnectionLossAsync(CancellationToken cancellationToken = default);
 }

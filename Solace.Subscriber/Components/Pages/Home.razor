@@ -2,14 +2,14 @@
 @implements IDisposable
 @inject ISolaceSubscriberClient SubscriberClient
 @inject MessageHistory MessageHistory
+@inject IJSRuntime JS
 
 <PageTitle>Solace Subscriber</PageTitle>
 
 <div class="subscriber-page">
     <header class="hero">
         <p class="kicker">Solace PubSub+ / Subscriber</p>
-        <h1>Watch topics in real time.</h1>
-        <p class="lede">Connected events stream in automatically while subscription health stays visible.</p>
+        <h1 tabindex="-1">Subscriber Console</h1>
     </header>
 
     <section class="grid">
@@ -20,6 +20,12 @@
             {
                 <p class="details">@Connection.Details</p>
             }
+
+            <div class="action-row">
+                <button type="button" class="action connect" @onclick="ConnectAsync" disabled="@(!CanConnect)">Connect</button>
+                <button type="button" class="action disconnect" @onclick="DisconnectAsync" disabled="@(!CanDisconnect)">Disconnect</button>
+                <button type="button" class="action loss" @onclick="SimulateLossAsync" disabled="@(!CanSimulateLoss)">Simulate Link Loss</button>
+            </div>
 
             <div class="field-grid">
                 <label>
@@ -43,7 +49,7 @@
 
         <article class="panel stream">
             <div class="panel-top-row">
-                <h2>Inbound Message Stream</h2>
+                <h2>Inbound Message Stream (Last 20)</h2>
                 <button type="button" class="ghost" @onclick="ClearHistory">Clear</button>
             </div>
 
@@ -54,7 +60,7 @@
             else
             {
                 <ul>
-                    @foreach (var message in _messages)
+                    @foreach (var message in _messages.Take(20))
                     {
                         <li class="@CardClass(message)">
                             <div class="meta">
@@ -74,9 +80,13 @@
 
 @code {
     private IReadOnlyList<MessageRecord> _messages = [];
+    private bool _isConnectionBusy;
 
     private ConnectionSnapshot Connection => SubscriberClient.Connection;
     private string StatusClass => Connection.IsConnected ? "online" : "offline";
+    private bool CanConnect => !_isConnectionBusy && !Connection.IsConnected;
+    private bool CanDisconnect => !_isConnectionBusy && Connection.IsConnected;
+    private bool CanSimulateLoss => !_isConnectionBusy && Connection.IsConnected;
 
     protected override void OnInitialized()
     {
@@ -90,6 +100,49 @@
     {
         MessageHistory.Changed -= OnHistoryChanged;
         SubscriberClient.ConnectionChanged -= OnConnectionChanged;
+    }
+
+    private async Task ConnectAsync()
+    {
+        _isConnectionBusy = true;
+        try
+        {
+            await SubscriberClient.ConnectAsync();
+        }
+        finally
+        {
+            _isConnectionBusy = false;
+        }
+    }
+
+    private async Task DisconnectAsync()
+    {
+        _isConnectionBusy = true;
+        try
+        {
+            await SubscriberClient.DisconnectAsync();
+        }
+        finally
+        {
+            _isConnectionBusy = false;
+        }
+    }
+
+    private async Task SimulateLossAsync()
+    {
+        var confirmed = await JS.InvokeAsync<bool>("confirm", "Drop the Solace session without graceful disconnect?");
+        if (confirmed)
+        {
+            _isConnectionBusy = true;
+            try
+            {
+                await SubscriberClient.SimulateConnectionLossAsync();
+            }
+            finally
+            {
+                _isConnectionBusy = false;
+            }
+        }
     }
 
     private void ClearHistory() => MessageHistory.Clear();

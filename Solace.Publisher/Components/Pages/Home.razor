@@ -2,14 +2,14 @@
 @implements IDisposable
 @inject ISolacePublisherClient PublisherClient
 @inject MessageHistory MessageHistory
+@inject IJSRuntime JS
 
 <PageTitle>Solace Publisher</PageTitle>
 
 <div class="publisher-page">
     <header class="hero">
         <p class="kicker">Solace PubSub+ / Publisher</p>
-        <h1>Broadcast messages with confidence.</h1>
-        <p class="lede">Compose topic messages, send instantly, and keep an observable outbound timeline.</p>
+        <h1 tabindex="-1">Publisher Console</h1>
     </header>
 
     <section class="grid">
@@ -20,6 +20,12 @@
             {
                 <p class="details">@Connection.Details</p>
             }
+
+            <div class="action-row">
+                <button type="button" class="action connect" @onclick="ConnectAsync" disabled="@(!CanConnect)">Connect</button>
+                <button type="button" class="action disconnect" @onclick="DisconnectAsync" disabled="@(!CanDisconnect)">Disconnect</button>
+                <button type="button" class="action loss" @onclick="SimulateLossAsync" disabled="@(!CanSimulateLoss)">Simulate Link Loss</button>
+            </div>
 
             <div class="field-grid">
                 <label>
@@ -48,7 +54,10 @@
                     Payload
                     <textarea @bind="_payload" @bind:event="oninput" placeholder="Send JSON, text, or event snippets."></textarea>
                 </label>
-                <button class="send" type="submit" disabled="@_isSending">@ButtonText</button>
+                <div class="composer-actions">
+                    <button class="send" type="submit" disabled="@(!CanPublish)">@ButtonText</button>
+                    <button class="ghost" type="button" @onclick="UseJsonTemplate" disabled="@_isSending">Use JSON template</button>
+                </div>
                 @if (!string.IsNullOrWhiteSpace(_lastResult))
                 {
                     <p class="result">@_lastResult</p>
@@ -58,7 +67,7 @@
 
         <article class="panel timeline">
             <div class="panel-top-row">
-                <h2>Recent Outbound Events</h2>
+                <h2>Recent Outbound Events (Last 20)</h2>
                 <button type="button" class="ghost" @onclick="ClearHistory">Clear</button>
             </div>
 
@@ -69,7 +78,7 @@
             else
             {
                 <ul>
-                    @foreach (var message in _messages)
+                    @foreach (var message in _messages.Take(20))
                     {
                         <li class="@CardClass(message)">
                             <div class="meta">
@@ -90,13 +99,18 @@
 @code {
     private IReadOnlyList<MessageRecord> _messages = [];
     private string _topic = string.Empty;
-    private string _payload = "{";
+    private string _payload = string.Empty;
     private string _lastResult = string.Empty;
     private bool _isSending;
+    private bool _isConnectionBusy;
 
     private ConnectionSnapshot Connection => PublisherClient.Connection;
     private string StatusClass => Connection.IsConnected ? "online" : "offline";
     private string ButtonText => _isSending ? "Publishing..." : "Publish Message";
+    private bool CanConnect => !_isConnectionBusy && !Connection.IsConnected;
+    private bool CanDisconnect => !_isConnectionBusy && Connection.IsConnected;
+    private bool CanSimulateLoss => !_isConnectionBusy && Connection.IsConnected;
+    private bool CanPublish => !_isSending && Connection.IsConnected;
 
     protected override void OnInitialized()
     {
@@ -111,6 +125,52 @@
     {
         MessageHistory.Changed -= OnHistoryChanged;
         PublisherClient.ConnectionChanged -= OnConnectionChanged;
+    }
+
+    private async Task ConnectAsync()
+    {
+        _isConnectionBusy = true;
+        try
+        {
+            var success = await PublisherClient.ConnectAsync();
+            _lastResult = success ? "Connected." : "Connect failed. Check status for details.";
+        }
+        finally
+        {
+            _isConnectionBusy = false;
+        }
+    }
+
+    private async Task DisconnectAsync()
+    {
+        _isConnectionBusy = true;
+        try
+        {
+            var success = await PublisherClient.DisconnectAsync();
+            _lastResult = success ? "Disconnected." : "Disconnect failed. Check status for details.";
+        }
+        finally
+        {
+            _isConnectionBusy = false;
+        }
+    }
+
+    private async Task SimulateLossAsync()
+    {
+        var confirmed = await JS.InvokeAsync<bool>("confirm", "Drop the Solace session without graceful disconnect?");
+        if (confirmed)
+        {
+            _isConnectionBusy = true;
+            try
+            {
+                var success = await PublisherClient.SimulateConnectionLossAsync();
+                _lastResult = success ? "Connection dropped. Use Connect to re-establish." : "Unable to drop connection.";
+            }
+            finally
+            {
+                _isConnectionBusy = false;
+            }
+        }
     }
 
     private async Task PublishAsync()
@@ -132,9 +192,14 @@
         }
     }
 
+    private void UseJsonTemplate()
+    {
+        _payload = "{\n  \"event\": \"sample\",\n  \"sentAt\": \"" + DateTimeOffset.UtcNow.ToString("O") + "\"\n}";
+    }
+
     private void ClearHistory() => MessageHistory.Clear();
 
-    private string CardClass(MessageRecord record) => record.Success ? "ok" : "fail";
+    private static string CardClass(MessageRecord record) => record.Success ? "ok" : "fail";
 
     private void OnHistoryChanged()
     {

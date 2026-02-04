@@ -13,13 +13,13 @@
 .hero {
     position: relative;
     overflow: hidden;
-    border-radius: 28px;
-    padding: clamp(1.4rem, 2.2vw, 2.4rem);
+    border-radius: 24px;
+    padding: clamp(0.95rem, 1.5vw, 1.4rem);
     background:
         radial-gradient(circle at 85% 20%, rgba(255, 234, 187, 0.75), transparent 45%),
         linear-gradient(130deg, #fff8ef, #ffe7cc 60%, #f9d9b1);
     border: 1px solid rgba(151, 95, 0, 0.2);
-    box-shadow: 0 22px 45px rgba(120, 69, 0, 0.18);
+    box-shadow: 0 18px 36px rgba(120, 69, 0, 0.16);
     animation: reveal 620ms ease;
 }
 
@@ -33,22 +33,20 @@
 }
 
 h1 {
-    margin: 0.5rem 0 0;
-    font-size: clamp(2rem, 4vw, 3.2rem);
-    line-height: 1.03;
+    margin: 0.45rem 0 0;
+    font-size: clamp(1.55rem, 2.7vw, 2.25rem);
+    line-height: 1.05;
     font-family: "Syne", sans-serif;
-    max-width: 18ch;
 }
 
-.lede {
-    margin: 0.8rem 0 0;
-    color: var(--ink-soft);
-    font-size: 1rem;
-    max-width: 56ch;
+h1:focus,
+h1:focus-visible {
+    outline: none;
+    box-shadow: none;
 }
 
 .grid {
-    margin-top: 1.2rem;
+    margin-top: 1rem;
     display: grid;
     gap: 1rem;
     grid-template-columns: repeat(12, 1fr);
@@ -104,6 +102,45 @@ h1 {
     font-size: 0.88rem;
 }
 
+.action-row {
+    margin-top: 0.85rem;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.45rem;
+}
+
+.action {
+    border: 1px solid rgba(66, 74, 87, 0.28);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.75);
+    color: #2c3442;
+    padding: 0.46rem 0.68rem;
+    font-weight: 700;
+    font-size: 0.79rem;
+    cursor: pointer;
+}
+
+.action.connect {
+    background: linear-gradient(110deg, #ffd071, #f2c14f);
+    color: #272013;
+    border-color: rgba(206, 151, 31, 0.42);
+}
+
+.action.disconnect {
+    background: #eef4fa;
+}
+
+.action.loss {
+    background: #fff1f1;
+    color: #8d1f1f;
+    border-color: rgba(176, 61, 61, 0.32);
+}
+
+.action:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 .field-grid {
     margin-top: 0.9rem;
     display: grid;
@@ -139,6 +176,13 @@ form {
     margin-top: 0.85rem;
     display: grid;
     gap: 0.8rem;
+}
+
+.composer-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.55rem;
 }
 
 .send,
@@ -239,6 +283,14 @@ li.fail {
     .composer,
     .timeline {
         grid-column: span 12;
+    }
+
+    .action-row {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .action.loss {
+        grid-column: span 2;
     }
 }
 
