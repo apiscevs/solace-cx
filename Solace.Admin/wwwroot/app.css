@@ -1,0 +1,25 @@
+@import url("https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Syne:wght@600;700;800&display=swap");
+
+:root {
+    --app-bg: #f4ede3;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    min-height: 100%;
+    font-family: "Instrument Sans", sans-serif;
+    color: #1f2329;
+    background:
+        radial-gradient(circle at 8% 16%, rgba(255, 220, 163, 0.52), transparent 45%),
+        radial-gradient(circle at 87% 76%, rgba(209, 238, 255, 0.42), transparent 46%),
+        linear-gradient(180deg, #f6f2ec, #efe5da 66%, #e6d6c3);
+}
+
+a {
+    color: inherit;
+}

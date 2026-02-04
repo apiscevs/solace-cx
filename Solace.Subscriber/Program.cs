@@ -7,6 +7,9 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.AddServiceDefaults();
 
+builder.Services.AddOpenTelemetry()
+    .WithTracing(tracing => tracing.AddSource(SolaceSubscriberClient.ActivitySourceName));
+
 builder.Services
     .AddOptions<SolaceOptions>()
     .BindConfiguration(SolaceOptions.SectionName)

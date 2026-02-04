@@ -1,4 +1,5 @@
 <Solution>
+  <Project Path="Solace.Admin/Solace.Admin.csproj" />
   <Project Path="Solace.AppHost/Solace.AppHost.csproj" />
   <Project Path="Solace.Publisher/Solace.Publisher.csproj" />
   <Project Path="Solace.ServiceDefaults/Solace.ServiceDefaults.csproj" />

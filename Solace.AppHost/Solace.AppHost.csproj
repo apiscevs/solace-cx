@@ -1,6 +1,7 @@
 <Project Sdk="Aspire.AppHost.Sdk/13.1.0">
 
   <ItemGroup>
+    <ProjectReference Include="..\Solace.Admin\Solace.Admin.csproj" />
     <ProjectReference Include="..\Solace.Publisher\Solace.Publisher.csproj" />
     <ProjectReference Include="..\Solace.Subscriber\Solace.Subscriber.csproj" />
   </ItemGroup>

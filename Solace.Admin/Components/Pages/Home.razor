@@ -1,0 +1,224 @@
+﻿@page "/"
+@using Microsoft.Extensions.Options
+@using Solace.Admin.Options
+@using Solace.Admin.Services
+@inject ISolaceSempClient SempClient
+@inject IOptions<SolaceSempOptions> SempSettings
+
+<PageTitle>Solace Admin</PageTitle>
+
+<div class="admin-page">
+    <header class="hero">
+        <p class="kicker">Solace PubSub+ / Admin</p>
+        <h1 tabindex="-1">Queues & Subscriptions</h1>
+    </header>
+
+    <section class="grid">
+        <article class="panel connection">
+            <div class="panel-top-row">
+                <h2>Management Connection</h2>
+                <button class="action refresh" type="button" @onclick="RefreshAsync" disabled="@_isRefreshing">@RefreshButtonText</button>
+            </div>
+            <p class="status @StatusClass">@StatusText</p>
+            @if (!string.IsNullOrWhiteSpace(_error))
+            {
+                <p class="error">@_error</p>
+            }
+            <p class="details">@LastLoadedText</p>
+
+            <div class="field-grid">
+                <label>
+                    SEMP URL
+                    <input value="@SempSettings.Value.BaseUrl" readonly />
+                </label>
+                <label>
+                    Message VPN
+                    <input value="@SempSettings.Value.VpnName" readonly />
+                </label>
+                <label>
+                    Management User
+                    <input value="@SempSettings.Value.Username" readonly />
+                </label>
+            </div>
+        </article>
+
+        <article class="panel queues">
+            <div class="panel-top-row">
+                <h2>Queue Inventory</h2>
+                <p class="count">@($"{_queues.Count} queues")</p>
+            </div>
+
+            @if (_isRefreshing && _queues.Count == 0)
+            {
+                <p class="empty">Loading queues from SEMP...</p>
+            }
+            else if (!string.IsNullOrWhiteSpace(_error) && _queues.Count == 0)
+            {
+                <p class="empty">Unable to load queue data.</p>
+            }
+            else if (_queues.Count == 0)
+            {
+                <p class="empty">No queues returned for this VPN.</p>
+            }
+            else
+            {
+                <ul>
+                    @foreach (var queue in _queues.OrderBy(x => x.QueueName, StringComparer.OrdinalIgnoreCase))
+                    {
+                        var isExpanded = _expanded.Contains(queue.QueueName);
+                        var subscriptions = GetSubscriptions(queue.QueueName);
+                        var subscriptionError = GetSubscriptionError(queue.QueueName);
+                        var loadingSubscriptions = _subscriptionLoading.Contains(queue.QueueName);
+
+                        <li>
+                            <div class="queue-head">
+                                <div>
+                                    <p class="queue-name">@queue.QueueName</p>
+                                    <p class="queue-meta">@queue.Permission · owner: @queue.Owner · spool: @queue.MaxMsgSpoolUsage MB</p>
+                                </div>
+                                <button class="action ghost" type="button" @onclick="() => ToggleQueueAsync(queue.QueueName)">
+                                    @(isExpanded ? "Hide subscriptions" : "Show subscriptions")
+                                </button>
+                            </div>
+
+                            <div class="queue-flags">
+                                <span class="flag @(queue.IngressEnabled ? "on" : "off")">Ingress @(queue.IngressEnabled ? "On" : "Off")</span>
+                                <span class="flag @(queue.EgressEnabled ? "on" : "off")">Egress @(queue.EgressEnabled ? "On" : "Off")</span>
+                            </div>
+
+                            @if (isExpanded)
+                            {
+                                <div class="subscriptions">
+                                    @if (loadingSubscriptions)
+                                    {
+                                        <p>Loading subscriptions...</p>
+                                    }
+                                    else if (!string.IsNullOrWhiteSpace(subscriptionError))
+                                    {
+                                        <p class="error">@subscriptionError</p>
+                                    }
+                                    else if (subscriptions.Count == 0)
+                                    {
+                                        <p>No subscriptions on this queue.</p>
+                                    }
+                                    else
+                                    {
+                                        <ol>
+                                            @foreach (var subscription in subscriptions.OrderBy(x => x.SubscriptionTopic, StringComparer.OrdinalIgnoreCase))
+                                            {
+                                                <li>@subscription.SubscriptionTopic</li>
+                                            }
+                                        </ol>
+                                    }
+                                </div>
+                            }
+                        </li>
+                    }
+                </ul>
+            }
+        </article>
+    </section>
+</div>
+
+@code {
+    private readonly HashSet<string> _expanded = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _subscriptionLoading = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, IReadOnlyList<SempQueueSubscription>> _subscriptions = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _subscriptionErrors = new(StringComparer.Ordinal);
+
+    private IReadOnlyList<SempQueueInfo> _queues = [];
+    private bool _isRefreshing;
+    private string? _error;
+    private DateTimeOffset? _lastLoadedUtc;
+
+    private string RefreshButtonText => _isRefreshing ? "Refreshing..." : "Refresh";
+    private string StatusClass => string.IsNullOrWhiteSpace(_error) ? "online" : "offline";
+    private string StatusText => string.IsNullOrWhiteSpace(_error) ? "Connected" : "Connection issue";
+    private string LastLoadedText => _lastLoadedUtc is null
+        ? "No data loaded yet."
+        : $"Last loaded at {_lastLoadedUtc.Value.ToLocalTime():HH:mm:ss}";
+
+    protected override Task OnInitializedAsync() => RefreshAsync();
+
+    private async Task RefreshAsync()
+    {
+        if (_isRefreshing)
+        {
+            return;
+        }
+
+        _isRefreshing = true;
+        _error = null;
+
+        try
+        {
+            _queues = await SempClient.GetQueuesAsync();
+            _lastLoadedUtc = DateTimeOffset.UtcNow;
+            TrimSubscriptionCache();
+        }
+        catch (Exception exception)
+        {
+            _error = exception.Message;
+        }
+        finally
+        {
+            _isRefreshing = false;
+        }
+    }
+
+    private async Task ToggleQueueAsync(string queueName)
+    {
+        if (!_expanded.Add(queueName))
+        {
+            _expanded.Remove(queueName);
+            return;
+        }
+
+        if (_subscriptions.ContainsKey(queueName))
+        {
+            return;
+        }
+
+        await LoadSubscriptionsAsync(queueName);
+    }
+
+    private async Task LoadSubscriptionsAsync(string queueName)
+    {
+        _subscriptionLoading.Add(queueName);
+        _subscriptionErrors.Remove(queueName);
+
+        try
+        {
+            _subscriptions[queueName] = await SempClient.GetQueueSubscriptionsAsync(queueName);
+        }
+        catch (Exception exception)
+        {
+            _subscriptionErrors[queueName] = exception.Message;
+            _subscriptions.Remove(queueName);
+        }
+        finally
+        {
+            _subscriptionLoading.Remove(queueName);
+        }
+    }
+
+    private IReadOnlyList<SempQueueSubscription> GetSubscriptions(string queueName) =>
+        _subscriptions.GetValueOrDefault(queueName) ?? [];
+
+    private string? GetSubscriptionError(string queueName) =>
+        _subscriptionErrors.GetValueOrDefault(queueName);
+
+    private void TrimSubscriptionCache()
+    {
+        var queueNames = _queues.Select(queue => queue.QueueName).ToHashSet(StringComparer.Ordinal);
+        var staleKeys = _subscriptions.Keys.Where(key => !queueNames.Contains(key)).ToArray();
+
+        foreach (var staleKey in staleKeys)
+        {
+            _subscriptions.Remove(staleKey);
+            _subscriptionErrors.Remove(staleKey);
+            _subscriptionLoading.Remove(staleKey);
+            _expanded.Remove(staleKey);
+        }
+    }
+}

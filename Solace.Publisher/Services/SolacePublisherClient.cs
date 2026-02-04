@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using Microsoft.Extensions.Options;
 using Solace.Shared;
@@ -12,6 +13,9 @@ public sealed class SolacePublisherClient(
     MessageHistory history,
     ILogger<SolacePublisherClient> logger) : IHostedService, IDisposable, ISolacePublisherClient
 {
+    public const string ActivitySourceName = "Solace.Publisher.Messaging";
+    private static readonly ActivitySource MessagingActivity = new(ActivitySourceName);
+
     private static readonly object FactorySync = new();
     private static bool _factoryInitialized;
 
@@ -72,6 +76,11 @@ public sealed class SolacePublisherClient(
             return await Task.FromCanceled<bool>(cancellationToken);
         }
 
+        using var activity = MessagingActivity.StartActivity("solace.publisher.connect", ActivityKind.Client);
+        activity?.SetTag("messaging.system", "solace");
+        activity?.SetTag("messaging.operation", "connect");
+        activity?.SetTag("server.address", Options.Host);
+
         await _connectionGate.WaitAsync(cancellationToken);
 
         try
@@ -86,6 +95,7 @@ public sealed class SolacePublisherClient(
                 if (_session is not null)
                 {
                     UpdateConnection(true, "Connected", "Session is already active.");
+                    activity?.SetStatus(ActivityStatusCode.Ok);
                     return true;
                 }
             }
@@ -113,6 +123,7 @@ public sealed class SolacePublisherClient(
                     true,
                     Options.Host));
 
+                activity?.SetStatus(ActivityStatusCode.Ok);
                 return true;
             }
             catch (Exception ex)
@@ -130,6 +141,8 @@ public sealed class SolacePublisherClient(
                     false,
                     ex.Message));
 
+                activity?.SetTag("error.type", ex.GetType().Name);
+                activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
                 return false;
             }
         }
@@ -211,6 +224,13 @@ public sealed class SolacePublisherClient(
             return Task.FromCanceled<bool>(cancellationToken);
         }
 
+        var resolvedTopic = ResolveTopic(topic);
+        using var activity = MessagingActivity.StartActivity("solace.publisher.publish", ActivityKind.Producer);
+        activity?.SetTag("messaging.system", "solace");
+        activity?.SetTag("messaging.operation", "publish");
+        activity?.SetTag("messaging.destination.name", resolvedTopic);
+        activity?.SetTag("server.address", Options.Host);
+
         SolaceSession? session;
         lock (_sessionSync)
         {
@@ -227,12 +247,12 @@ public sealed class SolacePublisherClient(
                 false,
                 "Session is not available."));
 
+            activity?.SetStatus(ActivityStatusCode.Error, "Session is not available.");
             return Task.FromResult(false);
         }
 
         try
         {
-            var resolvedTopic = ResolveTopic(topic);
             using var message = ContextFactory.Instance.CreateMessage();
 
             message.Destination = ContextFactory.Instance.CreateTopic(resolvedTopic);
@@ -254,6 +274,11 @@ public sealed class SolacePublisherClient(
             if (!success)
             {
                 logger.LogWarning("Publish returned {Result} for topic {Topic}", result, resolvedTopic);
+                activity?.SetStatus(ActivityStatusCode.Error, result.ToString());
+            }
+            else
+            {
+                activity?.SetStatus(ActivityStatusCode.Ok);
             }
 
             return Task.FromResult(success);
@@ -269,6 +294,8 @@ public sealed class SolacePublisherClient(
                 false,
                 ex.Message));
 
+            activity?.SetTag("error.type", ex.GetType().Name);
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             return Task.FromResult(false);
         }
     }

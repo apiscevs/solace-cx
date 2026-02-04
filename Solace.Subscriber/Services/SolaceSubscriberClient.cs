@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using Microsoft.Extensions.Options;
 using Solace.Shared;
@@ -12,6 +13,9 @@ public sealed class SolaceSubscriberClient(
     MessageHistory history,
     ILogger<SolaceSubscriberClient> logger) : IHostedService, IDisposable, ISolaceSubscriberClient
 {
+    public const string ActivitySourceName = "Solace.Subscriber.Messaging";
+    private static readonly ActivitySource MessagingActivity = new(ActivitySourceName);
+
     private static readonly object FactorySync = new();
     private static bool _factoryInitialized;
 
@@ -75,6 +79,11 @@ public sealed class SolaceSubscriberClient(
             return await Task.FromCanceled<bool>(cancellationToken);
         }
 
+        using var activity = MessagingActivity.StartActivity("solace.subscriber.connect", ActivityKind.Client);
+        activity?.SetTag("messaging.system", "solace");
+        activity?.SetTag("messaging.operation", "connect");
+        activity?.SetTag("server.address", Options.Host);
+
         await _connectionGate.WaitAsync(cancellationToken);
 
         try
@@ -89,6 +98,7 @@ public sealed class SolaceSubscriberClient(
                 if (_session is not null)
                 {
                     UpdateConnection(true, "Connected", "Session is already active.");
+                    activity?.SetStatus(ActivityStatusCode.Ok);
                     return true;
                 }
             }
@@ -119,6 +129,7 @@ public sealed class SolaceSubscriberClient(
                     true,
                     Options.Host));
 
+                activity?.SetStatus(ActivityStatusCode.Ok);
                 return true;
             }
             catch (Exception ex)
@@ -136,6 +147,8 @@ public sealed class SolaceSubscriberClient(
                     false,
                     ex.Message));
 
+                activity?.SetTag("error.type", ex.GetType().Name);
+                activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
                 return false;
             }
         }
@@ -332,10 +345,16 @@ public sealed class SolaceSubscriberClient(
 
     private void OnMessageReceived(object? sender, MessageEventArgs args)
     {
+        var topic = args.Message.Destination?.Name ?? "(no topic)";
+        using var activity = MessagingActivity.StartActivity("solace.subscriber.receive", ActivityKind.Consumer);
+        activity?.SetTag("messaging.system", "solace");
+        activity?.SetTag("messaging.operation", "receive");
+        activity?.SetTag("messaging.destination.name", topic);
+        activity?.SetTag("server.address", Options.Host);
+
         try
         {
             var message = args.Message;
-            var topic = message.Destination?.Name ?? "(no topic)";
             var payload = ExtractPayload(message);
 
             history.Add(new MessageRecord(
@@ -345,6 +364,8 @@ public sealed class SolaceSubscriberClient(
                 payload,
                 true,
                 "Received"));
+
+            activity?.SetStatus(ActivityStatusCode.Ok);
         }
         catch (Exception ex)
         {
@@ -357,6 +378,9 @@ public sealed class SolaceSubscriberClient(
                 "Inbound message processing failed.",
                 false,
                 ex.Message));
+
+            activity?.SetTag("error.type", ex.GetType().Name);
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
         }
         finally
         {
@@ -409,6 +433,12 @@ public sealed class SolaceSubscriberClient(
             return;
         }
 
+        using var activity = MessagingActivity.StartActivity("solace.subscriber.subscribe", ActivityKind.Client);
+        activity?.SetTag("messaging.system", "solace");
+        activity?.SetTag("messaging.operation", "subscribe");
+        activity?.SetTag("messaging.destination.name", SubscriptionTopic);
+        activity?.SetTag("server.address", Options.Host);
+
         try
         {
             SolaceSession? session;
@@ -419,6 +449,7 @@ public sealed class SolaceSubscriberClient(
 
             if (session is null)
             {
+                activity?.SetStatus(ActivityStatusCode.Error, "Session is not available.");
                 return;
             }
 
@@ -432,6 +463,8 @@ public sealed class SolaceSubscriberClient(
                 "Subscribed to topic.",
                 true,
                 SubscriptionTopic));
+
+            activity?.SetStatus(ActivityStatusCode.Ok);
         }
         catch (Exception ex)
         {
@@ -444,6 +477,9 @@ public sealed class SolaceSubscriberClient(
                 "Subscription failed.",
                 false,
                 ex.Message));
+
+            activity?.SetTag("error.type", ex.GetType().Name);
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
         }
     }
 
