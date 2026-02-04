@@ -178,6 +178,52 @@ form {
     gap: 0.8rem;
 }
 
+.advanced {
+    border: 1px solid rgba(74, 83, 98, 0.18);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.55);
+    padding: 0.7rem 0.8rem;
+}
+
+.advanced summary {
+    cursor: pointer;
+    font-weight: 700;
+    color: #3a4250;
+}
+
+.advanced-grid {
+    margin-top: 0.7rem;
+    display: grid;
+    gap: 0.65rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.84rem;
+    color: #424b5a;
+}
+
+.checkbox-row input {
+    width: 1rem;
+    height: 1rem;
+}
+
+.advanced-actions {
+    margin-top: 0.7rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.run-status {
+    margin: 0.62rem 0 0;
+    font-size: 0.84rem;
+    color: #4b5568;
+}
+
 .composer-actions {
     display: flex;
     flex-wrap: wrap;
@@ -291,6 +337,10 @@ li.fail {
 
     .action.loss {
         grid-column: span 2;
+    }
+
+    .advanced-grid {
+        grid-template-columns: 1fr;
     }
 }
 

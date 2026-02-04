@@ -58,6 +58,36 @@
                     <button class="send" type="submit" disabled="@(!CanPublish)">@ButtonText</button>
                     <button class="ghost" type="button" @onclick="UseJsonTemplate" disabled="@_isSending">Use JSON template</button>
                 </div>
+
+                <details class="advanced">
+                    <summary>Advanced: Scheduled Burst</summary>
+                    <div class="advanced-grid">
+                        <label>
+                            Frequency (ms)
+                            <input type="number" min="100" step="100" @bind="_frequencyMs" />
+                        </label>
+                        <label>
+                            Duration (s)
+                            <input type="number" min="1" max="3600" step="1" @bind="_durationSeconds" />
+                        </label>
+                        <label>
+                            Start delay (s)
+                            <input type="number" min="0" max="60" step="1" @bind="_startDelaySeconds" />
+                        </label>
+                        <label class="checkbox-row">
+                            <input type="checkbox" @bind="_includeSequenceIndex" />
+                            Include message index in payload
+                        </label>
+                    </div>
+
+                    <div class="advanced-actions">
+                        <button type="button" class="action connect" @onclick="StartScheduledRunAsync" disabled="@(!CanStartRun)">Start Run</button>
+                        <button type="button" class="action loss" @onclick="StopScheduledRun" disabled="@(!CanStopRun)">Stop Run</button>
+                    </div>
+
+                    <p class="run-status">@RunStatusText</p>
+                </details>
+
                 @if (!string.IsNullOrWhiteSpace(_lastResult))
                 {
                     <p class="result">@_lastResult</p>
@@ -104,13 +134,31 @@
     private bool _isSending;
     private bool _isConnectionBusy;
 
+    private int _frequencyMs = 1_000;
+    private int _durationSeconds = 30;
+    private int _startDelaySeconds;
+    private bool _includeSequenceIndex = true;
+    private bool _isRunActive;
+    private int _runSentCount;
+    private int _runFailedCount;
+    private int _runCurrentIndex;
+    private string _runId = "-";
+    private CancellationTokenSource? _runCts;
+
     private ConnectionSnapshot Connection => PublisherClient.Connection;
     private string StatusClass => Connection.IsConnected ? "online" : "offline";
     private string ButtonText => _isSending ? "Publishing..." : "Publish Message";
     private bool CanConnect => !_isConnectionBusy && !Connection.IsConnected;
     private bool CanDisconnect => !_isConnectionBusy && Connection.IsConnected;
     private bool CanSimulateLoss => !_isConnectionBusy && Connection.IsConnected;
-    private bool CanPublish => !_isSending && Connection.IsConnected;
+    private bool CanPublish => !_isSending && !_isRunActive && Connection.IsConnected;
+    private bool CanStartRun => !_isConnectionBusy && !_isRunActive && Connection.IsConnected;
+    private bool CanStopRun => _isRunActive;
+
+    private string RunStatusText =>
+        _isRunActive
+            ? $"Run {_runId}: sent {_runSentCount}, failed {_runFailedCount}, next index {_runCurrentIndex + 1}."
+            : "Idle. Configure frequency and duration, then start run.";
 
     protected override void OnInitialized()
     {
@@ -123,6 +171,9 @@
 
     public void Dispose()
     {
+        _runCts?.Cancel();
+        _runCts?.Dispose();
+
         MessageHistory.Changed -= OnHistoryChanged;
         PublisherClient.ConnectionChanged -= OnConnectionChanged;
     }
@@ -163,6 +214,7 @@
             _isConnectionBusy = true;
             try
             {
+                StopScheduledRun();
                 var success = await PublisherClient.SimulateConnectionLossAsync();
                 _lastResult = success ? "Connection dropped. Use Connect to re-establish." : "Unable to drop connection.";
             }
@@ -190,6 +242,107 @@
         {
             _isSending = false;
         }
+    }
+
+    private Task StartScheduledRunAsync()
+    {
+        if (!CanStartRun)
+        {
+            return Task.CompletedTask;
+        }
+
+        _frequencyMs = Math.Clamp(_frequencyMs, 100, 60_000);
+        _durationSeconds = Math.Clamp(_durationSeconds, 1, 3_600);
+        _startDelaySeconds = Math.Clamp(_startDelaySeconds, 0, 60);
+
+        _runCts?.Cancel();
+        _runCts?.Dispose();
+
+        _runCts = new CancellationTokenSource();
+        _runId = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
+        _runSentCount = 0;
+        _runFailedCount = 0;
+        _runCurrentIndex = 0;
+        _isRunActive = true;
+        _lastResult = $"Run {_runId} started.";
+
+        _ = RunScheduledAsync(_runId, _runCts.Token);
+        return Task.CompletedTask;
+    }
+
+    private void StopScheduledRun()
+    {
+        _runCts?.Cancel();
+    }
+
+    private async Task RunScheduledAsync(string runId, CancellationToken token)
+    {
+        try
+        {
+            if (_startDelaySeconds > 0)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(_startDelaySeconds), token);
+            }
+
+            var stopAt = DateTimeOffset.UtcNow.AddSeconds(_durationSeconds);
+            while (DateTimeOffset.UtcNow < stopAt && !token.IsCancellationRequested)
+            {
+                _runCurrentIndex++;
+                var payload = BuildScheduledPayload(_runCurrentIndex, runId);
+                var success = await PublisherClient.PublishAsync(_topic, payload, token);
+
+                if (success)
+                {
+                    _runSentCount++;
+                }
+                else
+                {
+                    _runFailedCount++;
+                }
+
+                await InvokeAsync(StateHasChanged);
+
+                var remaining = stopAt - DateTimeOffset.UtcNow;
+                if (remaining <= TimeSpan.Zero)
+                {
+                    break;
+                }
+
+                var wait = TimeSpan.FromMilliseconds(_frequencyMs);
+                if (wait > remaining)
+                {
+                    wait = remaining;
+                }
+
+                await Task.Delay(wait, token);
+            }
+
+            _lastResult = token.IsCancellationRequested
+                ? $"Run {runId} stopped. Sent {_runSentCount}, failed {_runFailedCount}."
+                : $"Run {runId} completed. Sent {_runSentCount}, failed {_runFailedCount}.";
+        }
+        catch (OperationCanceledException)
+        {
+            _lastResult = $"Run {runId} stopped. Sent {_runSentCount}, failed {_runFailedCount}.";
+        }
+        finally
+        {
+            _isRunActive = false;
+            _runCts?.Dispose();
+            _runCts = null;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private string BuildScheduledPayload(int index, string runId)
+    {
+        var body = string.IsNullOrWhiteSpace(_payload) ? "(empty payload)" : _payload;
+        if (!_includeSequenceIndex)
+        {
+            return body;
+        }
+
+        return $"[run:{runId} index:{index}] {body}";
     }
 
     private void UseJsonTemplate()
