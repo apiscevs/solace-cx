@@ -1,4 +1,5 @@
 using Solace.Shared;
+using Solace.Shared.Management;
 using Solace.Shared.Messaging;
 using Solace.Subscriber.Components;
 using Solace.Subscriber.Services;
@@ -15,6 +16,12 @@ builder.Services
     .BindConfiguration(SolaceOptions.SectionName)
     .ValidateDataAnnotations()
     .ValidateOnStart();
+
+builder.Services
+    .AddOptions<SolaceSempOptions>()
+    .BindConfiguration(SolaceSempOptions.SectionName);
+
+builder.Services.AddHttpClient<ISolaceQueueCatalogClient, SolaceQueueCatalogClient>();
 
 builder.Services.AddSingleton<MessageHistory>();
 builder.Services.AddSingleton<SolaceSubscriberClient>();

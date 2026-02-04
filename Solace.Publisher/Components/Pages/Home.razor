@@ -1,6 +1,8 @@
 @page "/"
 @implements IDisposable
+@using Solace.Shared.Management
 @inject ISolacePublisherClient PublisherClient
+@inject ISolaceQueueCatalogClient QueueCatalogClient
 @inject MessageHistory MessageHistory
 @inject IJSRuntime JS
 
@@ -47,9 +49,53 @@
             <h2>Compose Message</h2>
             <form @onsubmit="PublishAsync">
                 <label>
-                    Topic
-                    <input @bind="_topic" @bind:event="oninput" placeholder="solace/test/messages" />
+                    Send Mode
+                    <select @bind="_sendMode">
+                        <option value="@SendMode.DirectTopic">Direct Topic</option>
+                        <option value="@SendMode.GuaranteedQueue">Guaranteed Queue</option>
+                    </select>
                 </label>
+
+                @if (IsGuaranteedQueueMode)
+                {
+                    <label>
+                        Target Queue
+                        <div class="queue-picker">
+                            <select @bind="_selectedQueue" disabled="@(_isQueueLoading || _availableQueues.Count == 0)">
+                                @if (_availableQueues.Count == 0)
+                                {
+                                    <option value="">No queues available</option>
+                                }
+                                else
+                                {
+                                    @foreach (var queue in _availableQueues)
+                                    {
+                                        <option value="@queue.QueueName">@QueueOptionLabel(queue)</option>
+                                    }
+                                }
+                            </select>
+                            <button class="ghost queue-refresh" type="button" @onclick="RefreshQueuesAsync" disabled="@_isQueueLoading">
+                                @(_isQueueLoading ? "Refreshing..." : "Refresh")
+                            </button>
+                        </div>
+                    </label>
+                    @if (!string.IsNullOrWhiteSpace(_queueLoadError))
+                    {
+                        <p class="hint warn">@_queueLoadError</p>
+                    }
+                    else if (!string.IsNullOrWhiteSpace(QueuePreflightWarning))
+                    {
+                        <p class="hint warn">@QueuePreflightWarning</p>
+                    }
+                }
+                else
+                {
+                    <label>
+                        Topic
+                        <input @bind="_topic" @bind:event="oninput" placeholder="solace/test/messages" />
+                    </label>
+                }
+
                 <label>
                     Payload
                     <textarea @bind="_payload" @bind:event="oninput" placeholder="Send JSON, text, or event snippets."></textarea>
@@ -79,6 +125,25 @@
                             Include message index in payload
                         </label>
                     </div>
+
+                    @if (IsGuaranteedQueueMode)
+                    {
+                        <div class="advanced-grid grouping-grid">
+                            <label>
+                                Entity pool size
+                                <input type="number" min="2" max="5000" step="1" @bind="_entityPoolSize" />
+                            </label>
+                            <label>
+                                Group distribution
+                                <select @bind="_groupDistribution">
+                                    <option value="@GroupDistribution.RoundRobin">Round robin</option>
+                                    <option value="@GroupDistribution.Random">Random</option>
+                                    <option value="@GroupDistribution.HotKeySkew">Hot key skew</option>
+                                </select>
+                            </label>
+                        </div>
+                        <p class="run-status">Auto grouping enabled. Group IDs are generated per message for partition simulation.</p>
+                    }
 
                     <div class="advanced-actions">
                         <button type="button" class="action connect" @onclick="StartScheduledRunAsync" disabled="@(!CanStartRun)">Start Run</button>
@@ -127,17 +192,39 @@
 </div>
 
 @code {
+    private enum SendMode
+    {
+        DirectTopic,
+        GuaranteedQueue
+    }
+
+    private enum GroupDistribution
+    {
+        RoundRobin,
+        Random,
+        HotKeySkew
+    }
+
+    private readonly Random _random = new();
     private IReadOnlyList<MessageRecord> _messages = [];
+    private IReadOnlyList<SolaceQueueInfo> _availableQueues = [];
     private string _topic = string.Empty;
     private string _payload = string.Empty;
     private string _lastResult = string.Empty;
+    private string _selectedQueue = string.Empty;
+    private string _queueLoadError = string.Empty;
     private bool _isSending;
     private bool _isConnectionBusy;
+    private bool _isQueueLoading;
+    private int _roundRobinIndex;
 
     private int _frequencyMs = 1_000;
     private int _durationSeconds = 30;
     private int _startDelaySeconds;
     private bool _includeSequenceIndex = true;
+    private int _entityPoolSize = 40;
+    private GroupDistribution _groupDistribution = GroupDistribution.RoundRobin;
+    private SendMode _sendMode = SendMode.DirectTopic;
     private bool _isRunActive;
     private int _runSentCount;
     private int _runFailedCount;
@@ -146,27 +233,34 @@
     private CancellationTokenSource? _runCts;
 
     private ConnectionSnapshot Connection => PublisherClient.Connection;
+    private bool IsGuaranteedQueueMode => _sendMode == SendMode.GuaranteedQueue;
+    private SolaceQueueInfo? SelectedQueueInfo => _availableQueues.FirstOrDefault(x => x.QueueName == _selectedQueue);
+    private string? QueuePreflightWarning => BuildQueuePreflightWarning();
     private string StatusClass => Connection.IsConnected ? "online" : "offline";
     private string ButtonText => _isSending ? "Publishing..." : "Publish Message";
+    private bool HasValidQueueSelection => !string.IsNullOrWhiteSpace(_selectedQueue);
     private bool CanConnect => !_isConnectionBusy && !Connection.IsConnected;
     private bool CanDisconnect => !_isConnectionBusy && Connection.IsConnected;
     private bool CanSimulateLoss => !_isConnectionBusy && Connection.IsConnected;
-    private bool CanPublish => !_isSending && !_isRunActive && Connection.IsConnected;
-    private bool CanStartRun => !_isConnectionBusy && !_isRunActive && Connection.IsConnected;
+    private bool CanPublish => !_isSending && !_isRunActive && Connection.IsConnected && (!IsGuaranteedQueueMode || HasValidQueueSelection);
+    private bool CanStartRun => !_isConnectionBusy && !_isRunActive && Connection.IsConnected && (!IsGuaranteedQueueMode || HasValidQueueSelection);
     private bool CanStopRun => _isRunActive;
+    private string DestinationSummary => IsGuaranteedQueueMode ? $"queue {_selectedQueue}" : $"topic {_topic}";
 
     private string RunStatusText =>
         _isRunActive
-            ? $"Run {_runId}: sent {_runSentCount}, failed {_runFailedCount}, next index {_runCurrentIndex + 1}."
+            ? $"Run {_runId} [{DestinationSummary}]: sent {_runSentCount}, failed {_runFailedCount}, next index {_runCurrentIndex + 1}."
             : "Idle. Configure frequency and duration, then start run.";
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         _topic = PublisherClient.Options.DefaultPublishTopic;
         _messages = MessageHistory.Snapshot;
 
         MessageHistory.Changed += OnHistoryChanged;
         PublisherClient.ConnectionChanged += OnConnectionChanged;
+
+        await RefreshQueuesAsync();
     }
 
     public void Dispose()
@@ -231,8 +325,8 @@
 
         try
         {
-            var success = await PublisherClient.PublishAsync(_topic, _payload);
-            _lastResult = success ? "Message sent." : "Publish failed. Check status for details.";
+            var success = await PublishWithCurrentModeAsync(index: null, runId: null, cancellationToken: CancellationToken.None);
+            _lastResult = success ? $"Message sent to {DestinationSummary}." : "Publish failed. Check status for details.";
             if (success)
             {
                 _payload = string.Empty;
@@ -254,6 +348,7 @@
         _frequencyMs = Math.Clamp(_frequencyMs, 100, 60_000);
         _durationSeconds = Math.Clamp(_durationSeconds, 1, 3_600);
         _startDelaySeconds = Math.Clamp(_startDelaySeconds, 0, 60);
+        _entityPoolSize = Math.Clamp(_entityPoolSize, 2, 5_000);
 
         _runCts?.Cancel();
         _runCts?.Dispose();
@@ -264,7 +359,7 @@
         _runFailedCount = 0;
         _runCurrentIndex = 0;
         _isRunActive = true;
-        _lastResult = $"Run {_runId} started.";
+        _lastResult = $"Run {_runId} started on {DestinationSummary}.";
 
         _ = RunScheduledAsync(_runId, _runCts.Token);
         return Task.CompletedTask;
@@ -288,8 +383,7 @@
             while (DateTimeOffset.UtcNow < stopAt && !token.IsCancellationRequested)
             {
                 _runCurrentIndex++;
-                var payload = BuildScheduledPayload(_runCurrentIndex, runId);
-                var success = await PublisherClient.PublishAsync(_topic, payload, token);
+                var success = await PublishWithCurrentModeAsync(_runCurrentIndex, runId, token);
 
                 if (success)
                 {
@@ -334,20 +428,139 @@
         }
     }
 
-    private string BuildScheduledPayload(int index, string runId)
+    private async Task<bool> PublishWithCurrentModeAsync(int? index, string? runId, CancellationToken cancellationToken)
+    {
+        if (IsGuaranteedQueueMode)
+        {
+            var partitionKey = GeneratePartitionKey();
+            var payload = BuildPayload(index, runId, partitionKey);
+            return await PublisherClient.PublishToQueueAsync(_selectedQueue, payload, partitionKey, cancellationToken);
+        }
+
+        var directPayload = BuildPayload(index, runId, partitionKey: null);
+        return await PublisherClient.PublishDirectAsync(_topic, directPayload, cancellationToken);
+    }
+
+    private string BuildPayload(int? index, string? runId, string? partitionKey)
     {
         var body = string.IsNullOrWhiteSpace(_payload) ? "(empty payload)" : _payload;
-        if (!_includeSequenceIndex)
+        if (!_includeSequenceIndex || index is null || string.IsNullOrWhiteSpace(runId))
         {
             return body;
         }
 
-        return $"[run:{runId} index:{index}] {body}";
+        if (string.IsNullOrWhiteSpace(partitionKey))
+        {
+            return $"[run:{runId} index:{index}] {body}";
+        }
+
+        return $"[run:{runId} index:{index} group:{partitionKey}] {body}";
+    }
+
+    private string GeneratePartitionKey()
+    {
+        var normalizedPoolSize = Math.Clamp(_entityPoolSize, 2, 5_000);
+        var entityIndex = _groupDistribution switch
+        {
+            GroupDistribution.RoundRobin => GetRoundRobinIndex(normalizedPoolSize),
+            GroupDistribution.Random => _random.Next(1, normalizedPoolSize + 1),
+            GroupDistribution.HotKeySkew => GetHotKeyIndex(normalizedPoolSize),
+            _ => GetRoundRobinIndex(normalizedPoolSize)
+        };
+
+        return $"entity-{entityIndex:D4}";
+    }
+
+    private int GetRoundRobinIndex(int poolSize)
+    {
+        var index = (_roundRobinIndex % poolSize) + 1;
+        _roundRobinIndex++;
+        return index;
+    }
+
+    private int GetHotKeyIndex(int poolSize)
+    {
+        var bucket = Math.Max(2, poolSize / 5);
+        var useHotBucket = _random.NextDouble() < 0.7;
+        return useHotBucket
+            ? _random.Next(1, bucket + 1)
+            : _random.Next(1, poolSize + 1);
+    }
+
+    private async Task RefreshQueuesAsync()
+    {
+        _isQueueLoading = true;
+        _queueLoadError = string.Empty;
+
+        try
+        {
+            var queues = await QueueCatalogClient.GetQueuesAsync();
+            _availableQueues = queues
+                .Where(q => !q.QueueName.StartsWith("#", StringComparison.Ordinal))
+                .OrderBy(q => q.QueueName, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            if (!_availableQueues.Any(q => q.QueueName == _selectedQueue))
+            {
+                _selectedQueue = _availableQueues.FirstOrDefault()?.QueueName ?? string.Empty;
+            }
+        }
+        catch (Exception ex)
+        {
+            _availableQueues = [];
+            _selectedQueue = string.Empty;
+            _queueLoadError = ex.Message;
+        }
+        finally
+        {
+            _isQueueLoading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private string QueueOptionLabel(SolaceQueueInfo queue)
+    {
+        if (queue.IsPartitioned)
+        {
+            return $"{queue.QueueName} (partitioned:{queue.PartitionCount})";
+        }
+
+        return queue.QueueName;
+    }
+
+    private string? BuildQueuePreflightWarning()
+    {
+        if (!IsGuaranteedQueueMode)
+        {
+            return null;
+        }
+
+        if (SelectedQueueInfo is null)
+        {
+            return "Select a durable queue to send guaranteed messages.";
+        }
+
+        if (!SelectedQueueInfo.IngressEnabled)
+        {
+            return "Selected queue has ingress disabled. Publishing will fail until ingress is enabled.";
+        }
+
+        if (!SelectedQueueInfo.IsPartitioned)
+        {
+            return "Selected queue is not partitioned. Auto grouping will still work, but partition distribution cannot be tested.";
+        }
+
+        if (string.Equals(SelectedQueueInfo.AccessType, "exclusive", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Selected queue is exclusive. Only one active consumer flow will receive messages at a time.";
+        }
+
+        return null;
     }
 
     private void UseJsonTemplate()
     {
-        _payload = "{\n  \"event\": \"sample\",\n  \"sentAt\": \"" + DateTimeOffset.UtcNow.ToString("O") + "\"\n}";
+        _payload = "{\n  \"event\": \"order-updated\",\n  \"sentAt\": \"" + DateTimeOffset.UtcNow.ToString("O") + "\",\n  \"status\": \"processing\"\n}";
     }
 
     private void ClearHistory() => MessageHistory.Clear();

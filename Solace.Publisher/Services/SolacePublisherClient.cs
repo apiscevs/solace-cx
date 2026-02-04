@@ -217,87 +217,26 @@ public sealed class SolacePublisherClient(
         }
     }
 
-    public Task<bool> PublishAsync(string topic, string payload, CancellationToken cancellationToken = default)
+    public Task<bool> PublishDirectAsync(string topic, string payload, CancellationToken cancellationToken = default)
     {
-        if (cancellationToken.IsCancellationRequested)
-        {
-            return Task.FromCanceled<bool>(cancellationToken);
-        }
-
         var resolvedTopic = ResolveTopic(topic);
-        using var activity = MessagingActivity.StartActivity("solace.publisher.publish", ActivityKind.Producer);
-        activity?.SetTag("messaging.system", "solace");
-        activity?.SetTag("messaging.operation", "publish");
-        activity?.SetTag("messaging.destination.name", resolvedTopic);
-        activity?.SetTag("server.address", Options.Host);
+        return PublishInternalAsync(
+            resolvedDestination: resolvedTopic,
+            payload: payload,
+            isDirectMode: true,
+            partitionKey: null,
+            cancellationToken: cancellationToken);
+    }
 
-        SolaceSession? session;
-        lock (_sessionSync)
-        {
-            session = _session;
-        }
-
-        if (session is null)
-        {
-            history.Add(new MessageRecord(
-                DateTimeOffset.UtcNow,
-                MessageDirection.System,
-                "system/publisher",
-                "Cannot publish while disconnected.",
-                false,
-                "Session is not available."));
-
-            activity?.SetStatus(ActivityStatusCode.Error, "Session is not available.");
-            return Task.FromResult(false);
-        }
-
-        try
-        {
-            using var message = ContextFactory.Instance.CreateMessage();
-
-            message.Destination = ContextFactory.Instance.CreateTopic(resolvedTopic);
-            message.DeliveryMode = MessageDeliveryMode.Direct;
-            message.BinaryAttachment = Encoding.UTF8.GetBytes(payload);
-            message.SenderTimestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-
-            var result = session.Send(message);
-            var success = result == ReturnCode.SOLCLIENT_OK;
-
-            history.Add(new MessageRecord(
-                DateTimeOffset.UtcNow,
-                MessageDirection.Outbound,
-                resolvedTopic,
-                payload,
-                success,
-                success ? "Sent" : result.ToString()));
-
-            if (!success)
-            {
-                logger.LogWarning("Publish returned {Result} for topic {Topic}", result, resolvedTopic);
-                activity?.SetStatus(ActivityStatusCode.Error, result.ToString());
-            }
-            else
-            {
-                activity?.SetStatus(ActivityStatusCode.Ok);
-            }
-
-            return Task.FromResult(success);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Publish failed for topic {Topic}", topic);
-            history.Add(new MessageRecord(
-                DateTimeOffset.UtcNow,
-                MessageDirection.Outbound,
-                ResolveTopic(topic),
-                payload,
-                false,
-                ex.Message));
-
-            activity?.SetTag("error.type", ex.GetType().Name);
-            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-            return Task.FromResult(false);
-        }
+    public Task<bool> PublishToQueueAsync(string queueName, string payload, string? partitionKey, CancellationToken cancellationToken = default)
+    {
+        var resolvedQueue = ResolveQueueName(queueName);
+        return PublishInternalAsync(
+            resolvedDestination: resolvedQueue,
+            payload: payload,
+            isDirectMode: false,
+            partitionKey: partitionKey,
+            cancellationToken: cancellationToken);
     }
 
     public async Task<bool> SimulateConnectionLossAsync(CancellationToken cancellationToken = default)
@@ -462,6 +401,118 @@ public sealed class SolacePublisherClient(
     {
         var cleaned = topic.Trim();
         return string.IsNullOrWhiteSpace(cleaned) ? Options.DefaultPublishTopic : cleaned;
+    }
+
+    private string ResolveQueueName(string queueName)
+    {
+        return queueName.Trim();
+    }
+
+    private Task<bool> PublishInternalAsync(
+        string resolvedDestination,
+        string payload,
+        bool isDirectMode,
+        string? partitionKey,
+        CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return Task.FromCanceled<bool>(cancellationToken);
+        }
+
+        if (string.IsNullOrWhiteSpace(resolvedDestination))
+        {
+            return Task.FromResult(false);
+        }
+
+        using var activity = MessagingActivity.StartActivity("solace.publisher.publish", ActivityKind.Producer);
+        activity?.SetTag("messaging.system", "solace");
+        activity?.SetTag("messaging.operation", "publish");
+        activity?.SetTag("messaging.destination.name", resolvedDestination);
+        activity?.SetTag("messaging.destination.kind", isDirectMode ? "topic" : "queue");
+        activity?.SetTag("server.address", Options.Host);
+
+        SolaceSession? session;
+        lock (_sessionSync)
+        {
+            session = _session;
+        }
+
+        if (session is null)
+        {
+            history.Add(new MessageRecord(
+                DateTimeOffset.UtcNow,
+                MessageDirection.System,
+                "system/publisher",
+                "Cannot publish while disconnected.",
+                false,
+                "Session is not available."));
+
+            activity?.SetStatus(ActivityStatusCode.Error, "Session is not available.");
+            return Task.FromResult(false);
+        }
+
+        try
+        {
+            using var message = ContextFactory.Instance.CreateMessage();
+
+            message.Destination = isDirectMode
+                ? ContextFactory.Instance.CreateTopic(resolvedDestination)
+                : ContextFactory.Instance.CreateQueue(resolvedDestination);
+            message.DeliveryMode = isDirectMode ? MessageDeliveryMode.Direct : MessageDeliveryMode.Persistent;
+            message.BinaryAttachment = Encoding.UTF8.GetBytes(payload);
+            message.SenderTimestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+            if (!isDirectMode && !string.IsNullOrWhiteSpace(partitionKey))
+            {
+                message.CreateUserPropertyMap();
+                message.UserPropertyMap.AddString(MessageUserPropertyConstants.SOLCLIENT_USER_PROP_QUEUE_PARTITION_KEY, partitionKey);
+            }
+
+            var result = session.Send(message);
+            var success = result == ReturnCode.SOLCLIENT_OK;
+
+            var details = success
+                ? isDirectMode
+                    ? "Sent (Direct)"
+                    : $"Sent (Persistent, partition key: {partitionKey ?? "none"})"
+                : result.ToString();
+
+            history.Add(new MessageRecord(
+                DateTimeOffset.UtcNow,
+                MessageDirection.Outbound,
+                isDirectMode ? resolvedDestination : $"queue://{resolvedDestination}",
+                payload,
+                success,
+                details));
+
+            if (!success)
+            {
+                logger.LogWarning("Publish returned {Result} for destination {Destination}", result, resolvedDestination);
+                activity?.SetStatus(ActivityStatusCode.Error, result.ToString());
+            }
+            else
+            {
+                activity?.SetStatus(ActivityStatusCode.Ok);
+            }
+
+            return Task.FromResult(success);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Publish failed for destination {Destination}", resolvedDestination);
+            history.Add(new MessageRecord(
+                DateTimeOffset.UtcNow,
+                MessageDirection.Outbound,
+                isDirectMode ? resolvedDestination : $"queue://{resolvedDestination}",
+                payload,
+                false,
+                ex.Message));
+
+            activity?.SetTag("error.type", ex.GetType().Name);
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            return Task.FromResult(false);
+        }
     }
 
     private static void EnsureFactoryInitialized()

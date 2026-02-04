@@ -15,7 +15,9 @@ public interface ISolacePublisherClient
 
     Task<bool> DisconnectAsync(CancellationToken cancellationToken = default);
 
-    Task<bool> PublishAsync(string topic, string payload, CancellationToken cancellationToken = default);
+    Task<bool> PublishDirectAsync(string topic, string payload, CancellationToken cancellationToken = default);
+
+    Task<bool> PublishToQueueAsync(string queueName, string payload, string? partitionKey, CancellationToken cancellationToken = default);
 
     Task<bool> SimulateConnectionLossAsync(CancellationToken cancellationToken = default);
 }

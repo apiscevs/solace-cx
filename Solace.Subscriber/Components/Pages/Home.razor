@@ -1,6 +1,8 @@
 @page "/"
 @implements IDisposable
+@using Solace.Shared.Management
 @inject ISolaceSubscriberClient SubscriberClient
+@inject ISolaceQueueCatalogClient QueueCatalogClient
 @inject MessageHistory MessageHistory
 @inject IJSRuntime JS
 
@@ -29,6 +31,47 @@
 
             <div class="field-grid">
                 <label>
+                    Receive Mode
+                    <select @bind="_receiveMode">
+                        <option value="@SubscriberReceiveMode.DirectTopic">Direct Topic</option>
+                        <option value="@SubscriberReceiveMode.DurableQueue">Durable Queue (ClientAck)</option>
+                    </select>
+                </label>
+
+                @if (IsDurableQueueMode)
+                {
+                    <label>
+                        Queue
+                        <div class="queue-picker">
+                            <select @bind="_selectedQueue" disabled="@(_isQueueLoading || _availableQueues.Count == 0)">
+                                @if (_availableQueues.Count == 0)
+                                {
+                                    <option value="">No queues available</option>
+                                }
+                                else
+                                {
+                                    @foreach (var queue in _availableQueues)
+                                    {
+                                        <option value="@queue.QueueName">@QueueOptionLabel(queue)</option>
+                                    }
+                                }
+                            </select>
+                            <button class="ghost queue-refresh" type="button" @onclick="RefreshQueuesAsync" disabled="@_isQueueLoading">
+                                @(_isQueueLoading ? "Refreshing..." : "Refresh")
+                            </button>
+                        </div>
+                    </label>
+                    @if (!string.IsNullOrWhiteSpace(_queueLoadError))
+                    {
+                        <p class="hint warn">@_queueLoadError</p>
+                    }
+                    else if (!string.IsNullOrWhiteSpace(QueuePreflightWarning))
+                    {
+                        <p class="hint warn">@QueuePreflightWarning</p>
+                    }
+                }
+
+                <label>
                     Broker URL
                     <input value="@SubscriberClient.Options.Host" readonly />
                 </label>
@@ -41,9 +84,23 @@
                     <input value="@SubscriberClient.Options.Username" readonly />
                 </label>
                 <label>
-                    Subscription Topic
-                    <input value="@SubscriberClient.SubscriptionTopic" readonly />
+                    Instance Name
+                    <input value="@SubscriberClient.ClientName" readonly />
                 </label>
+                @if (SubscriberClient.ActiveReceiveMode == SubscriberReceiveMode.DirectTopic)
+                {
+                    <label>
+                        Active Subscription Topic
+                        <input value="@SubscriberClient.SubscriptionTopic" readonly />
+                    </label>
+                }
+                else
+                {
+                    <label>
+                        Active Queue
+                        <input value="@SubscriberClient.ActiveQueueName" readonly />
+                    </label>
+                }
             </div>
         </article>
 
@@ -80,20 +137,31 @@
 
 @code {
     private IReadOnlyList<MessageRecord> _messages = [];
+    private IReadOnlyList<SolaceQueueInfo> _availableQueues = [];
+    private SubscriberReceiveMode _receiveMode = SubscriberReceiveMode.DirectTopic;
+    private string _selectedQueue = string.Empty;
+    private string _queueLoadError = string.Empty;
     private bool _isConnectionBusy;
+    private bool _isQueueLoading;
 
     private ConnectionSnapshot Connection => SubscriberClient.Connection;
     private string StatusClass => Connection.IsConnected ? "online" : "offline";
-    private bool CanConnect => !_isConnectionBusy && !Connection.IsConnected;
+    private bool IsDurableQueueMode => _receiveMode == SubscriberReceiveMode.DurableQueue;
+    private SolaceQueueInfo? SelectedQueueInfo => _availableQueues.FirstOrDefault(q => q.QueueName == _selectedQueue);
+    private string? QueuePreflightWarning => BuildQueuePreflightWarning();
+    private bool HasValidQueueSelection => !string.IsNullOrWhiteSpace(_selectedQueue);
+    private bool CanConnect => !_isConnectionBusy && !Connection.IsConnected && (!IsDurableQueueMode || HasValidQueueSelection);
     private bool CanDisconnect => !_isConnectionBusy && Connection.IsConnected;
     private bool CanSimulateLoss => !_isConnectionBusy && Connection.IsConnected;
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         _messages = MessageHistory.Snapshot;
 
         MessageHistory.Changed += OnHistoryChanged;
         SubscriberClient.ConnectionChanged += OnConnectionChanged;
+
+        await RefreshQueuesAsync();
     }
 
     public void Dispose()
@@ -107,7 +175,9 @@
         _isConnectionBusy = true;
         try
         {
-            await SubscriberClient.ConnectAsync();
+            await SubscriberClient.ConnectAsync(
+                _receiveMode,
+                _receiveMode == SubscriberReceiveMode.DurableQueue ? _selectedQueue : null);
         }
         finally
         {
@@ -143,6 +213,77 @@
                 _isConnectionBusy = false;
             }
         }
+    }
+
+    private async Task RefreshQueuesAsync()
+    {
+        _isQueueLoading = true;
+        _queueLoadError = string.Empty;
+
+        try
+        {
+            var queues = await QueueCatalogClient.GetQueuesAsync();
+            _availableQueues = queues
+                .Where(q => !q.QueueName.StartsWith("#", StringComparison.Ordinal))
+                .OrderBy(q => q.QueueName, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            if (!_availableQueues.Any(q => q.QueueName == _selectedQueue))
+            {
+                _selectedQueue = _availableQueues.FirstOrDefault()?.QueueName ?? string.Empty;
+            }
+        }
+        catch (Exception ex)
+        {
+            _availableQueues = [];
+            _selectedQueue = string.Empty;
+            _queueLoadError = ex.Message;
+        }
+        finally
+        {
+            _isQueueLoading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private string QueueOptionLabel(SolaceQueueInfo queue)
+    {
+        if (queue.IsPartitioned)
+        {
+            return $"{queue.QueueName} (partitioned:{queue.PartitionCount})";
+        }
+
+        return queue.QueueName;
+    }
+
+    private string? BuildQueuePreflightWarning()
+    {
+        if (!IsDurableQueueMode)
+        {
+            return null;
+        }
+
+        if (SelectedQueueInfo is null)
+        {
+            return "Select a durable queue before connecting.";
+        }
+
+        if (!SelectedQueueInfo.EgressEnabled)
+        {
+            return "Selected queue has egress disabled. Consumption will fail until egress is enabled.";
+        }
+
+        if (string.Equals(SelectedQueueInfo.AccessType, "exclusive", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Selected queue is exclusive. Only one active consumer flow can receive messages.";
+        }
+
+        if (!SelectedQueueInfo.IsPartitioned)
+        {
+            return "Selected queue is not partitioned. Multi-instance partition testing is limited on this queue.";
+        }
+
+        return null;
     }
 
     private void ClearHistory() => MessageHistory.Clear();

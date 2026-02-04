@@ -48,6 +48,17 @@ dotnet user-secrets set "Solace:VpnName" "apservice-fr" --project Solace.Subscri
 dotnet user-secrets set "Solace:Username" "solace-cloud-client" --project Solace.Subscriber
 dotnet user-secrets set "Solace:Password" "<your-password>" --project Solace.Subscriber
 dotnet user-secrets set "Solace:TopicPrefix" "solace/test" --project Solace.Subscriber
+
+# Optional but recommended for queue dropdown + durable queue mode
+dotnet user-secrets set "SolaceSemp:BaseUrl" "https://mr-connection-aaepajf6a13.messaging.solace.cloud:943/SEMP/v2/config" --project Solace.Publisher
+dotnet user-secrets set "SolaceSemp:VpnName" "apservice-fr" --project Solace.Publisher
+dotnet user-secrets set "SolaceSemp:Username" "<management-username>" --project Solace.Publisher
+dotnet user-secrets set "SolaceSemp:Password" "<management-password>" --project Solace.Publisher
+
+dotnet user-secrets set "SolaceSemp:BaseUrl" "https://mr-connection-aaepajf6a13.messaging.solace.cloud:943/SEMP/v2/config" --project Solace.Subscriber
+dotnet user-secrets set "SolaceSemp:VpnName" "apservice-fr" --project Solace.Subscriber
+dotnet user-secrets set "SolaceSemp:Username" "<management-username>" --project Solace.Subscriber
+dotnet user-secrets set "SolaceSemp:Password" "<management-password>" --project Solace.Subscriber
 ```
 
 3) Configure secrets for the admin app (SEMP):
@@ -85,6 +96,13 @@ Both apps bind `Solace` section to `SolaceOptions` (`Solace.Shared/SolaceOptions
 - `Username` (required)
 - `Password` (required)
 - `TopicPrefix` (default: `solace/test`)
+
+SEMP settings used by Publisher/Subscriber/Admin queue-management views:
+
+- `SolaceSemp:BaseUrl` (SEMP config endpoint)
+- `SolaceSemp:VpnName`
+- `SolaceSemp:Username` (management user)
+- `SolaceSemp:Password`
 
 Derived defaults:
 

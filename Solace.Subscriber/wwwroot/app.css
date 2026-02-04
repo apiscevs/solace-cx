@@ -12,10 +12,7 @@ body {
     min-height: 100%;
     font-family: "Work Sans", sans-serif;
     color: #112431;
-    background:
-        radial-gradient(circle at 12% 8%, rgba(163, 236, 255, 0.62), transparent 44%),
-        radial-gradient(circle at 90% 82%, rgba(72, 173, 206, 0.22), transparent 47%),
-        linear-gradient(180deg, #eefbff, #d9f0f8 66%, #c9e7f2);
+    background: linear-gradient(180deg, #eefbff, #d9f0f8 66%, #c9e7f2);
 }
 
 a {

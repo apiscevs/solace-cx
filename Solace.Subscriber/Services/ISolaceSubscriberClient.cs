@@ -3,6 +3,12 @@ using Solace.Shared.Messaging;
 
 namespace Solace.Subscriber.Services;
 
+public enum SubscriberReceiveMode
+{
+    DirectTopic,
+    DurableQueue
+}
+
 public interface ISolaceSubscriberClient
 {
     event Action? ConnectionChanged;
@@ -11,9 +17,15 @@ public interface ISolaceSubscriberClient
 
     ConnectionSnapshot Connection { get; }
 
+    string ClientName { get; }
+
     string SubscriptionTopic { get; }
 
-    Task<bool> ConnectAsync(CancellationToken cancellationToken = default);
+    SubscriberReceiveMode ActiveReceiveMode { get; }
+
+    string? ActiveQueueName { get; }
+
+    Task<bool> ConnectAsync(SubscriberReceiveMode mode, string? queueName, CancellationToken cancellationToken = default);
 
     Task<bool> DisconnectAsync(CancellationToken cancellationToken = default);
 
