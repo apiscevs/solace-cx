@@ -25,6 +25,8 @@ public sealed class SolaceOptions
 
     public string DefaultSubscriptionTopic => $"{NormalizePrefix()}/>";
 
+    public string StatsTopicPrefix => $"{NormalizePrefix()}/stats/subscribers";
+
     private string NormalizePrefix()
     {
         var trimmed = TopicPrefix.Trim().Trim('/');

@@ -8,96 +8,95 @@
 <PageTitle>Solace Visualizer</PageTitle>
 
 <div class="visualizer-page">
-    <header class="hero">
-        <p class="kicker">Solace PubSub+ / Visualizer</p>
-        <div class="hero-row">
-            <div class="title-block">
-                <h1>Partition Flow Visualizer</h1>
-                <p>See how partitions bind to consumers in real time, powered by SEMP monitor data.</p>
-            </div>
-            <div class="control-block">
-                <label>
-                    Queue
-                    <select @bind="_selectedQueue" @bind:after="OnQueueChanged" disabled="@(_queues.Count == 0 || _isLoading)">
-                        @if (_queues.Count == 0)
-                        {
-                            <option value="">No partitioned queues found</option>
-                        }
-                        else
-                        {
-                            @foreach (var queue in _queues)
-                            {
-                                <option value="@queue.QueueName">@queue.QueueName</option>
-                            }
-                        }
-                    </select>
-                </label>
-                <label>
-                    Update rate
-                    <select @bind="_refreshSeconds" @bind:after="OnRefreshRateChanged">
-                        @foreach (var option in RefreshOptions)
-                        {
-                            <option value="@option">@option s</option>
-                        }
-                    </select>
-                </label>
-                <div class="toggle-row">
-                    <input id="auto-refresh" type="checkbox" checked="@_autoRefresh" @onchange="OnAutoRefreshChanged" />
-                    <label for="auto-refresh">Auto refresh</label>
-                </div>
-                <button type="button" class="action" @onclick="RefreshAsync" disabled="@_isLoading">
-                    @(_isLoading ? "Refreshing..." : "Refresh now")
-                </button>
-            </div>
+    <header class="topbar">
+        <div class="title-block">
+            <p class="kicker">Solace PubSub+ / Visualizer</p>
+            <h1>Partition Flow Visualizer</h1>
+            <p>See how partitions bind to consumers in real time, powered by SEMP monitor data.</p>
         </div>
-        <div class="status-strip">
-            <div>
-                <span>SEMP host</span>
-                <strong>@SempHostLabel</strong>
+        <div class="control-block compact">
+            <label>
+                Queue
+                <select @bind="_selectedQueue" @bind:after="OnQueueChanged" disabled="@(_queues.Count == 0 || _isLoading)">
+                    @if (_queues.Count == 0)
+                    {
+                        <option value="">No partitioned queues found</option>
+                    }
+                    else
+                    {
+                        @foreach (var queue in _queues)
+                        {
+                            <option value="@queue.QueueName">@queue.QueueName</option>
+                        }
+                    }
+                </select>
+            </label>
+            <label>
+                Update rate
+                <select @bind="_refreshSeconds" @bind:after="OnRefreshRateChanged">
+                    @foreach (var option in RefreshOptions)
+                    {
+                        <option value="@option">@option s</option>
+                    }
+                </select>
+            </label>
+            <div class="toggle-row">
+                <input id="auto-refresh" type="checkbox" checked="@_autoRefresh" @onchange="OnAutoRefreshChanged" />
+                <label for="auto-refresh">Auto refresh</label>
             </div>
-            <div>
-                <span>VPN</span>
-                <strong>@VpnLabel</strong>
-            </div>
-            <div>
-                <span>Last update</span>
-                <strong>@LastUpdatedLabel</strong>
-            </div>
+            <button type="button" class="action" @onclick="RefreshAsync" disabled="@_isLoading">
+                @(_isLoading ? "Refreshing..." : "Refresh now")
+            </button>
         </div>
-        @if (!string.IsNullOrWhiteSpace(_error))
-        {
-            <div class="alert">@_error</div>
-        }
     </header>
 
-    <section class="canvas" style="--canvas-height:@($"{_canvasHeight}px")">
-        <div class="column publisher">
-            <div class="card accent">
-                <p class="card-kicker">Publisher</p>
-                <h2>Ingress Pulse</h2>
-                <p class="card-subtitle">Queue ingress + egress rates</p>
-                <div class="metric-grid">
-                    <div>
-                        <span>Ingress</span>
-                        <strong>@FormatRate(_snapshot?.IngressRate)</strong>
-                    </div>
-                    <div>
-                        <span>Egress</span>
-                        <strong>@FormatRate(_snapshot?.EgressRate)</strong>
-                    </div>
-                    <div>
-                        <span>Depth</span>
-                        <strong>@FormatCount(_snapshot?.Depth)</strong>
-                    </div>
+    <div class="status-strip compact">
+        <div class="status-pill">
+            <span>SEMP host</span>
+            <strong>@SempHostLabel</strong>
+        </div>
+        <div class="status-pill">
+            <span>VPN</span>
+            <strong>@VpnLabel</strong>
+        </div>
+        <div class="status-pill">
+            <span>Last update</span>
+            <strong>@LastUpdatedLabel</strong>
+        </div>
+    </div>
+    @if (!string.IsNullOrWhiteSpace(_error))
+    {
+        <div class="alert">@_error</div>
+    }
+
+    <section class="telemetry-strip">
+        <div class="rail-card">
+            <p class="card-kicker">Ingress Pulse</p>
+            <div class="pulse-metrics">
+                <div>
+                    <span>Ingress</span>
+                    <strong>@FormatRate(_snapshot?.IngressRate)</strong>
+                </div>
+                <div>
+                    <span>Egress</span>
+                    <strong>@FormatRate(_snapshot?.EgressRate)</strong>
+                </div>
+                <div>
+                    <span>Depth</span>
+                    <strong>@FormatCount(_snapshot?.Depth)</strong>
                 </div>
             </div>
-            <div class="card ghost">
-                <p class="card-kicker">Queue</p>
-                <h3>@(_snapshot?.QueueName ?? "Select a partitioned queue")</h3>
-                <p class="card-subtitle">Partitions: @(_snapshot is null ? "n/a" : _snapshot.PartitionCount.ToString())</p>
+        </div>
+        <div class="rail-card">
+            <p class="card-kicker">Queue</p>
+            <div class="queue-metrics">
+                <strong>@(_snapshot?.QueueName ?? "Select a partitioned queue")</strong>
+                <span>Partitions: @(_snapshot is null ? "n/a" : _snapshot.PartitionCount.ToString())</span>
             </div>
         </div>
+    </section>
 
+    <section class="canvas" style="--canvas-height:@($"{_canvasHeight}px")">
         <div class="column queue">
             <div class="stack-header">
                 <h3>Partition Stack</h3>
@@ -214,10 +213,10 @@
 
     private const int RowHeight = 64;
     private const int RowGap = 12;
-    private const int HeaderOffset = 88;
+    private const int HeaderOffset = 72;
     private const int CanvasWidth = 1000;
-    private const int PartitionLineX = 520;
-    private const int ConsumerLineX = 900;
+    private const int PartitionLineX = 585;
+    private const int ConsumerLineX = 665;
 
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
     private IReadOnlyList<SolaceQueueInfo> _queues = [];

@@ -1,3 +1,4 @@
+using Solace.Shared;
 using Solace.Shared.Management;
 using Solace.Visualizer.Components;
 using Solace.Visualizer.Services;
@@ -7,6 +8,12 @@ var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
 
 builder.Services
+    .AddOptions<SolaceOptions>()
+    .BindConfiguration(SolaceOptions.SectionName)
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
+builder.Services
     .AddOptions<SolaceSempOptions>()
     .BindConfiguration(SolaceSempOptions.SectionName)
     .ValidateDataAnnotations()
@@ -14,6 +21,9 @@ builder.Services
 
 builder.Services.AddHttpClient<ISolaceQueueCatalogClient, SolaceQueueCatalogClient>();
 builder.Services.AddHttpClient<ISolaceSempMonitorClient, SolaceSempMonitorClient>();
+builder.Services.AddSingleton<SubscriberStatsStore>();
+builder.Services.AddSingleton<SolaceStatsListener>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<SolaceStatsListener>());
 builder.Services.AddScoped<VisualizerDataService>();
 
 builder.Services.AddRazorComponents()

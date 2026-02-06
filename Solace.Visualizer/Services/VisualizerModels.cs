@@ -24,3 +24,11 @@ public sealed record ConsumerFlow(
     string State,
     double? MsgRate,
     IReadOnlyList<int> AssignedPartitions);
+
+public sealed record SubscriberStat(
+    string ClientName,
+    string? QueueName,
+    double? Rate,
+    long AckedTotal,
+    long AckedDelta,
+    DateTimeOffset TimestampUtc);

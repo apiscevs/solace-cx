@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using System.Text;
 using Microsoft.Extensions.Options;
 using Solace.Shared;
@@ -25,6 +26,9 @@ public sealed class SolaceSubscriberClient(
     private readonly SemaphoreSlim _connectionGate = new(1, 1);
 
     private readonly string _clientName = $"solace-subscriber-{Environment.ProcessId}";
+    private readonly string _statsTopic = $"{options.Value.StatsTopicPrefix}/solace-subscriber-{Environment.ProcessId}";
+    private readonly TimeSpan _statsInterval = TimeSpan.FromSeconds(1);
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private IContext? _context;
     private SolaceSession? _session;
     private SolaceFlow? _flow;
@@ -33,6 +37,11 @@ public sealed class SolaceSubscriberClient(
     private bool _disposed;
     private SubscriberReceiveMode _activeReceiveMode = SubscriberReceiveMode.DirectTopic;
     private string? _activeQueueName;
+    private PeriodicTimer? _statsTimer;
+    private CancellationTokenSource? _statsCts;
+    private long _ackCount;
+    private long _ackSnapshot;
+    private DateTimeOffset _lastStatsAt = DateTimeOffset.UtcNow;
 
     public event Action? ConnectionChanged;
 
@@ -161,6 +170,15 @@ public sealed class SolaceSubscriberClient(
                 else if (!BindQueueFlow(normalizedQueueName!))
                 {
                     throw new InvalidOperationException("Queue flow could not be established.");
+                }
+
+                if (mode == SubscriberReceiveMode.DurableQueue)
+                {
+                    StartStatsLoop();
+                }
+                else
+                {
+                    StopStatsLoop();
                 }
 
                 var destinationSummary = mode == SubscriberReceiveMode.DirectTopic
@@ -459,6 +477,10 @@ public sealed class SolaceSubscriberClient(
             var messageId = args.Message.ADMessageId;
             var ackResult = sourceFlow?.Ack(messageId) ?? ReturnCode.SOLCLIENT_FAIL;
             var ackSuccess = ackResult == ReturnCode.SOLCLIENT_OK;
+            if (ackSuccess)
+            {
+                Interlocked.Increment(ref _ackCount);
+            }
             var details = ackSuccess
                 ? $"Received + ACK (ADMessageId={messageId})"
                 : $"ACK failed ({ackResult}, ADMessageId={messageId})";
@@ -638,6 +660,8 @@ public sealed class SolaceSubscriberClient(
             _session = null;
         }
 
+        StopStatsLoop();
+
         _isSubscribed = false;
 
         if (flow is not null)
@@ -677,6 +701,107 @@ public sealed class SolaceSubscriberClient(
         session.Dispose();
         return (success, detail);
     }
+
+    private void StartStatsLoop()
+    {
+        if (_activeReceiveMode != SubscriberReceiveMode.DurableQueue || string.IsNullOrWhiteSpace(_activeQueueName))
+        {
+            return;
+        }
+
+        StopStatsLoop();
+        _statsCts = new CancellationTokenSource();
+        _statsTimer = new PeriodicTimer(_statsInterval);
+        _lastStatsAt = DateTimeOffset.UtcNow;
+        _ackSnapshot = Interlocked.Read(ref _ackCount);
+
+        var token = _statsCts.Token;
+        _ = Task.Run(async () =>
+        {
+            while (await _statsTimer.WaitForNextTickAsync(token))
+            {
+                PublishStatsSnapshot();
+            }
+        }, token);
+    }
+
+    private void StopStatsLoop()
+    {
+        _statsCts?.Cancel();
+        _statsCts?.Dispose();
+        _statsCts = null;
+        _statsTimer?.Dispose();
+        _statsTimer = null;
+    }
+
+    private void PublishStatsSnapshot()
+    {
+        if (_activeReceiveMode != SubscriberReceiveMode.DurableQueue || string.IsNullOrWhiteSpace(_activeQueueName))
+        {
+            return;
+        }
+
+        SolaceSession? session;
+        lock (_sessionSync)
+        {
+            session = _session;
+        }
+
+        if (session is null)
+        {
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var currentAck = Interlocked.Read(ref _ackCount);
+        var elapsed = (now - _lastStatsAt).TotalSeconds;
+        if (elapsed <= 0)
+        {
+            return;
+        }
+
+        var delta = currentAck - _ackSnapshot;
+        if (delta < 0)
+        {
+            delta = 0;
+        }
+
+        var rate = delta / elapsed;
+        _lastStatsAt = now;
+        _ackSnapshot = currentAck;
+
+        var payload = new SubscriberStatsMessage(
+            ClientName: _clientName,
+            QueueName: _activeQueueName,
+            ReceiveMode: _activeReceiveMode.ToString(),
+            AckedTotal: currentAck,
+            AckedDelta: delta,
+            Rate: rate,
+            TimestampUtc: now);
+
+        try
+        {
+            var message = ContextFactory.Instance.CreateMessage();
+            message.Destination = ContextFactory.Instance.CreateTopic(_statsTopic);
+            message.BinaryAttachment = JsonSerializer.SerializeToUtf8Bytes(payload, JsonOptions);
+            message.DeliveryMode = MessageDeliveryMode.Direct;
+            session.Send(message);
+            message.Dispose();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to publish subscriber stats.");
+        }
+    }
+
+    private sealed record SubscriberStatsMessage(
+        string ClientName,
+        string? QueueName,
+        string ReceiveMode,
+        long AckedTotal,
+        long AckedDelta,
+        double Rate,
+        DateTimeOffset TimestampUtc);
 
     private void DisposeFlow()
     {

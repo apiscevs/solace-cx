@@ -6,7 +6,8 @@ namespace Solace.Visualizer.Services;
 
 public sealed class VisualizerDataService(
     ISolaceQueueCatalogClient queueCatalogClient,
-    ISolaceSempMonitorClient monitorClient)
+    ISolaceSempMonitorClient monitorClient,
+    SubscriberStatsStore statsStore)
 {
     private static readonly string[] IngressRateFields =
     [
@@ -35,7 +36,7 @@ public sealed class VisualizerDataService(
         "txMsgRate",
         "averageTxMsgRate"
     ];
-    private static readonly string[] StateFields = ["operationalState", "state", "flowState"];
+    private static readonly string[] StateFields = ["operationalState", "state", "flowState", "activityState", "deliveryState"];
     private static readonly string[] ClientNameFields = ["clientName", "clientId", "clientUsername"];
     private static readonly string[] PartitionClientFields = ["partitionClientName", "clientName", "clientId"];
     private static readonly string[] PartitionParentFields = ["partitionQueueName", "parentQueueName"];
@@ -43,9 +44,12 @@ public sealed class VisualizerDataService(
     private static readonly string[] PartitionIdFields = ["partitionId", "partitionNumber", "partition", "assignedPartitionId"];
     private static readonly string[] PartitionArrayFields = ["partitionIds", "partitions"];
     private static readonly string[] QueueNameFields = ["queueName", "endpointName", "boundToQueueName", "boundEndpointName"];
+    private static readonly string[] AckCountFields = ["ackedMsgCount", "storeAndForwardAckedMsgCount"];
 
     private readonly ISolaceQueueCatalogClient _queueCatalogClient = queueCatalogClient;
     private readonly ISolaceSempMonitorClient _monitorClient = monitorClient;
+    private readonly SubscriberStatsStore _statsStore = statsStore;
+    private readonly Dictionary<string, RateSample> _consumerRateSamples = new(StringComparer.OrdinalIgnoreCase);
 
     public async Task<IReadOnlyList<SolaceQueueInfo>> GetPartitionedQueuesAsync(CancellationToken cancellationToken = default)
     {
@@ -104,17 +108,29 @@ public sealed class VisualizerDataService(
         }
 
         var consumerBuilders = new Dictionary<string, ConsumerAccumulator>(StringComparer.OrdinalIgnoreCase);
+        var statsSnapshot = _statsStore.Snapshot;
         foreach (var flow in flows)
         {
             var clientName = GetString(flow, ClientNameFields) ?? "Unknown";
+            var flowRate = GetDouble(flow, MsgRateFields) ?? ComputeFlowRate(clientName, flow);
+            if (statsSnapshot.TryGetValue(clientName, out var stat)
+                && string.Equals(stat.QueueName, queueName, StringComparison.OrdinalIgnoreCase)
+                && stat.Rate is not null)
+            {
+                flowRate = stat.Rate;
+            }
             if (!consumerBuilders.TryGetValue(clientName, out var accumulator))
             {
                 accumulator = new ConsumerAccumulator(
-                    ClientName: clientName,
-                    FlowId: GetString(flow, FlowIdFields),
-                    State: GetString(flow, StateFields) ?? "unknown",
-                    MsgRate: GetDouble(flow, MsgRateFields));
+                    clientName,
+                    GetString(flow, FlowIdFields),
+                    GetString(flow, StateFields) ?? "unknown",
+                    flowRate);
                 consumerBuilders[clientName] = accumulator;
+            }
+            else if (flowRate is not null)
+            {
+                accumulator.MsgRate = (accumulator.MsgRate ?? 0) + flowRate.Value;
             }
 
             foreach (var partitionId in ExtractPartitionIds(flow, queueName))
@@ -127,11 +143,12 @@ public sealed class VisualizerDataService(
         {
             if (!consumerBuilders.TryGetValue(assignment.Value, out var accumulator))
             {
+                statsSnapshot.TryGetValue(assignment.Value, out var stat);
                 accumulator = new ConsumerAccumulator(
-                    ClientName: assignment.Value,
-                    FlowId: null,
-                    State: "bound",
-                    MsgRate: null);
+                    assignment.Value,
+                    null,
+                    "bound",
+                    stat?.Rate);
                 consumerBuilders[assignment.Value] = accumulator;
             }
 
@@ -454,14 +471,47 @@ public sealed class VisualizerDataService(
             ?? GetLong(element, "spooledMsgCount");
     }
 
-    private sealed record ConsumerAccumulator(
-        string ClientName,
-        string? FlowId,
-        string State,
-        double? MsgRate)
+    private double? ComputeFlowRate(string clientName, JsonElement flow)
     {
+        var ackedCount = GetLong(flow, AckCountFields);
+        if (ackedCount is null)
+        {
+            return null;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (_consumerRateSamples.TryGetValue(clientName, out var sample))
+        {
+            var delta = ackedCount.Value - sample.AckedCount;
+            var elapsed = (now - sample.Timestamp).TotalSeconds;
+            if (elapsed > 0 && delta >= 0)
+            {
+                _consumerRateSamples[clientName] = new RateSample(ackedCount.Value, now);
+                return delta / elapsed;
+            }
+        }
+
+        _consumerRateSamples[clientName] = new RateSample(ackedCount.Value, now);
+        return null;
+    }
+
+    private sealed class ConsumerAccumulator
+    {
+        public ConsumerAccumulator(string clientName, string? flowId, string state, double? msgRate)
+        {
+            ClientName = clientName;
+            FlowId = flowId;
+            State = state;
+            MsgRate = msgRate;
+        }
+
+        public string ClientName { get; }
+        public string? FlowId { get; }
+        public string State { get; }
+        public double? MsgRate { get; set; }
         public HashSet<int> AssignedPartitions { get; } = new();
     }
 
     private sealed record PartitionMetrics(long? Depth, double? IngressRate, double? EgressRate);
+    private sealed record RateSample(long AckedCount, DateTimeOffset Timestamp);
 }
