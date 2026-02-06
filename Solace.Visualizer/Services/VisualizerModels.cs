@@ -4,6 +4,8 @@ public sealed record VisualizerSnapshot(
     string QueueName,
     int PartitionCount,
     long? Depth,
+    long? Inflight,
+    long? Active,
     double? IngressRate,
     double? EgressRate,
     IReadOnlyList<QueuePartition> Partitions,
@@ -14,6 +16,7 @@ public sealed record VisualizerSnapshot(
 public sealed record QueuePartition(
     int PartitionId,
     long? Depth,
+    long? Unacked,
     double? IngressRate,
     double? EgressRate,
     string? AssignedConsumer);

@@ -45,6 +45,7 @@ public sealed class VisualizerDataService(
     private static readonly string[] PartitionArrayFields = ["partitionIds", "partitions"];
     private static readonly string[] QueueNameFields = ["queueName", "endpointName", "boundToQueueName", "boundEndpointName"];
     private static readonly string[] AckCountFields = ["ackedMsgCount", "storeAndForwardAckedMsgCount"];
+    private static readonly string[] UnackedFields = ["txUnackedMsgCount", "unackedMsgCount"];
 
     private readonly ISolaceQueueCatalogClient _queueCatalogClient = queueCatalogClient;
     private readonly ISolaceSempMonitorClient _monitorClient = monitorClient;
@@ -97,6 +98,22 @@ public sealed class VisualizerDataService(
             {
                 parentDepth = partitionMetrics.Values.Sum(metrics => metrics.Depth ?? 0);
             }
+        }
+
+        var parentUnacked = GetUnacked(parentQueue);
+        if (parentUnacked is null && partitionMetrics.Count > 0)
+        {
+            var hasUnacked = partitionMetrics.Values.Any(metrics => metrics.Unacked is not null);
+            if (hasUnacked)
+            {
+                parentUnacked = partitionMetrics.Values.Sum(metrics => metrics.Unacked ?? 0);
+            }
+        }
+
+        long? activeTotal = null;
+        if (parentDepth is not null || parentUnacked is not null)
+        {
+            activeTotal = (parentDepth ?? 0) + (parentUnacked ?? 0);
         }
 
         var parentIngress = GetDouble(parentQueue, IngressRateFields);
@@ -193,6 +210,7 @@ public sealed class VisualizerDataService(
                     return new QueuePartition(
                         PartitionId: id,
                         Depth: metrics?.Depth,
+                        Unacked: metrics?.Unacked,
                         IngressRate: metrics?.IngressRate,
                         EgressRate: metrics?.EgressRate,
                         AssignedConsumer: owner);
@@ -209,6 +227,7 @@ public sealed class VisualizerDataService(
                     return new QueuePartition(
                         PartitionId: entry.Key,
                         Depth: entry.Value.Depth,
+                        Unacked: entry.Value.Unacked,
                         IngressRate: entry.Value.IngressRate,
                         EgressRate: entry.Value.EgressRate,
                         AssignedConsumer: owner);
@@ -224,6 +243,8 @@ public sealed class VisualizerDataService(
             QueueName: queueName,
             PartitionCount: partitionCount,
             Depth: parentDepth,
+            Inflight: parentUnacked,
+            Active: activeTotal,
             IngressRate: parentIngress,
             EgressRate: parentEgress,
             Partitions: partitions,
@@ -241,7 +262,7 @@ public sealed class VisualizerDataService(
     {
         partitionId = -1;
         assignedConsumer = null;
-        metrics = new PartitionMetrics(null, null, null);
+        metrics = new PartitionMetrics(null, null, null, null);
 
         if (queue.ValueKind == JsonValueKind.Undefined)
         {
@@ -260,6 +281,7 @@ public sealed class VisualizerDataService(
             assignedConsumer = GetString(queue, PartitionClientFields);
             metrics = new PartitionMetrics(
                 Depth: GetDepth(queue),
+                Unacked: GetUnacked(queue),
                 IngressRate: GetDouble(queue, IngressRateFields),
                 EgressRate: GetDouble(queue, EgressRateFields));
             return true;
@@ -471,6 +493,11 @@ public sealed class VisualizerDataService(
             ?? GetLong(element, "spooledMsgCount");
     }
 
+    private static long? GetUnacked(JsonElement element)
+    {
+        return GetLong(element, UnackedFields);
+    }
+
     private double? ComputeFlowRate(string clientName, JsonElement flow)
     {
         var ackedCount = GetLong(flow, AckCountFields);
@@ -512,6 +539,6 @@ public sealed class VisualizerDataService(
         public HashSet<int> AssignedPartitions { get; } = new();
     }
 
-    private sealed record PartitionMetrics(long? Depth, double? IngressRate, double? EgressRate);
+    private sealed record PartitionMetrics(long? Depth, long? Unacked, double? IngressRate, double? EgressRate);
     private sealed record RateSample(long AckedCount, DateTimeOffset Timestamp);
 }

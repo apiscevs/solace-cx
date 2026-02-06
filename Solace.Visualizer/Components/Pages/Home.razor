@@ -4,6 +4,7 @@
 @using Solace.Visualizer.Services
 @inject VisualizerDataService VisualizerData
 @inject Microsoft.Extensions.Options.IOptions<SolaceSempOptions> SempOptions
+@inject IJSRuntime JS
 
 <PageTitle>Solace Visualizer</PageTitle>
 
@@ -82,8 +83,16 @@
                     <strong>@FormatRate(_snapshot?.EgressRate)</strong>
                 </div>
                 <div>
-                    <span>Depth</span>
+                    <span>Queued</span>
                     <strong>@FormatCount(_snapshot?.Depth)</strong>
+                </div>
+                <div>
+                    <span>In-flight</span>
+                    <strong>@FormatCount(_snapshot?.Inflight)</strong>
+                </div>
+                <div>
+                    <span>Active</span>
+                    <strong>@FormatCount(_snapshot?.Active)</strong>
                 </div>
             </div>
         </div>
@@ -118,9 +127,10 @@
                         <div class="partition-row">
                             <div class="partition-id">P@(partition.PartitionId)</div>
                             <div class="partition-metrics">
-                                <span>Depth <strong>@FormatCount(partition.Depth)</strong></span>
+                                <span>Queued <strong>@FormatCount(partition.Depth)</strong></span>
                                 <span>In <strong>@FormatRate(partition.IngressRate)</strong></span>
                                 <span>Out <strong>@FormatRate(partition.EgressRate)</strong></span>
+                                <span>Flight <strong>@FormatCount(partition.Unacked)</strong></span>
                             </div>
                             <div class="partition-owner">
                                 @if (!string.IsNullOrWhiteSpace(partition.AssignedConsumer))
@@ -184,12 +194,12 @@
             </div>
         </div>
 
-        <svg class="flow-lines" viewBox="0 0 1000 @_canvasHeight" preserveAspectRatio="none" aria-hidden="true">
+        <svg class="flow-lines" viewBox="0 0 @_svgWidth @_svgHeight" preserveAspectRatio="none" aria-hidden="true">
             @foreach (var line in _lines)
             {
-                <line x1="@line.StartX" y1="@line.StartY" x2="@line.EndX" y2="@line.EndY" stroke="@line.Color" stroke-width="2" stroke-linecap="round" />
-                <circle cx="@line.StartX" cy="@line.StartY" r="3.5" fill="@line.Color" />
-                <circle cx="@line.EndX" cy="@line.EndY" r="3.5" fill="@line.Color" />
+                <line x1="@line.StartX.ToString("0.#")" y1="@line.StartY.ToString("0.#")" x2="@line.EndX.ToString("0.#")" y2="@line.EndY.ToString("0.#")" stroke="@line.Color" stroke-width="2" stroke-linecap="round" />
+                <circle cx="@line.StartX.ToString("0.#")" cy="@line.StartY.ToString("0.#")" r="4" fill="@line.Color" />
+                <circle cx="@line.EndX.ToString("0.#")" cy="@line.EndY.ToString("0.#")" r="4" fill="@line.Color" />
             }
         </svg>
     </section>
@@ -211,13 +221,6 @@
         "#9dbf5a"
     ];
 
-    private const int RowHeight = 64;
-    private const int RowGap = 12;
-    private const int HeaderOffset = 72;
-    private const int CanvasWidth = 1000;
-    private const int PartitionLineX = 585;
-    private const int ConsumerLineX = 665;
-
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
     private IReadOnlyList<SolaceQueueInfo> _queues = [];
     private VisualizerSnapshot? _snapshot;
@@ -229,13 +232,73 @@
     private PeriodicTimer? _timer;
     private CancellationTokenSource? _pollCts;
     private int _canvasHeight = 420;
+    private double _svgWidth = 1000;
+    private double _svgHeight = 420;
     private IReadOnlyList<FlowLine> _lines = [];
     private DateTimeOffset? _lastUpdated;
+    private LinePositions? _linePositions;
 
     protected override async Task OnInitializedAsync()
     {
         await LoadQueuesAsync();
         await StartPollingAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        await MeasureAndUpdateLinesAsync();
+    }
+
+    private async Task MeasureAndUpdateLinesAsync()
+    {
+        if (_snapshot is null || _snapshot.Partitions.Count == 0 || _snapshot.Consumers.Count == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            var positions = await JS.InvokeAsync<LinePositions>("visualizer.getLinePositions", ".canvas");
+            if (positions is null || positions.Partitions.Count == 0 || positions.Consumers.Count == 0)
+            {
+                return;
+            }
+
+            var newLines = BuildLinesFromPositions(_snapshot, positions);
+
+            var linesChanged = newLines.Count != _lines.Count ||
+                               Math.Abs(positions.CanvasWidth - _svgWidth) > 1 ||
+                               Math.Abs(positions.CanvasHeight - _svgHeight) > 1;
+
+            if (!linesChanged && newLines.Count > 0 && _lines.Count > 0)
+            {
+                for (var i = 0; i < newLines.Count; i++)
+                {
+                    var n = newLines[i];
+                    var o = _lines[i];
+                    if (Math.Abs(n.StartX - o.StartX) > 1 || Math.Abs(n.StartY - o.StartY) > 1 ||
+                        Math.Abs(n.EndX - o.EndX) > 1 || Math.Abs(n.EndY - o.EndY) > 1 ||
+                        n.Color != o.Color)
+                    {
+                        linesChanged = true;
+                        break;
+                    }
+                }
+            }
+
+            if (linesChanged)
+            {
+                _linePositions = positions;
+                _svgWidth = positions.CanvasWidth;
+                _svgHeight = positions.CanvasHeight;
+                _lines = newLines;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch
+        {
+            // JS interop may fail during prerendering
+        }
     }
 
     private async Task LoadQueuesAsync()
@@ -351,12 +414,10 @@
     private void UpdateLayout(VisualizerSnapshot snapshot)
     {
         var rowCount = Math.Max(snapshot.Partitions.Count, snapshot.Consumers.Count);
-        var rowSpan = RowHeight + RowGap;
-        _canvasHeight = Math.Max(380, HeaderOffset + (rowCount * rowSpan) + 120);
-        _lines = BuildLines(snapshot);
+        _canvasHeight = Math.Max(380, 72 + (rowCount * 76) + 120);
     }
 
-    private IReadOnlyList<FlowLine> BuildLines(VisualizerSnapshot snapshot)
+    private IReadOnlyList<FlowLine> BuildLinesFromPositions(VisualizerSnapshot snapshot, LinePositions positions)
     {
         if (snapshot.Partitions.Count == 0 || snapshot.Consumers.Count == 0)
         {
@@ -378,11 +439,16 @@
                     continue;
                 }
 
-                var yStart = HeaderOffset + (partIndex * (RowHeight + RowGap)) + (RowHeight / 2.0);
-                var yEnd = HeaderOffset + (consumerIndex * (RowHeight + RowGap)) + (RowHeight / 2.0);
+                if (partIndex >= positions.Partitions.Count || consumerIndex >= positions.Consumers.Count)
+                {
+                    continue;
+                }
+
+                var partPos = positions.Partitions[partIndex];
+                var consPos = positions.Consumers[consumerIndex];
                 var color = LinePalette[consumerIndex % LinePalette.Length];
 
-                lines.Add(new FlowLine(PartitionLineX, yStart, ConsumerLineX, yEnd, color));
+                lines.Add(new FlowLine(partPos.RightX, partPos.CenterY, consPos.LeftX, consPos.CenterY, color));
             }
         }
 
@@ -451,4 +517,12 @@
     }
 
     private sealed record FlowLine(double StartX, double StartY, double EndX, double EndY, string Color);
+
+    private sealed record LinePositions(
+        double CanvasWidth,
+        double CanvasHeight,
+        List<ElementPosition> Partitions,
+        List<ElementPosition> Consumers);
+
+    private sealed record ElementPosition(int Index, double RightX, double LeftX, double CenterY);
 }
