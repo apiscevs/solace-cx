@@ -87,10 +87,6 @@
                     <strong>@FormatCount(_snapshot?.Depth)</strong>
                 </div>
                 <div>
-                    <span>In-flight</span>
-                    <strong>@FormatCount(_snapshot?.Inflight)</strong>
-                </div>
-                <div>
                     <span>Active</span>
                     <strong>@FormatCount(_snapshot?.Active)</strong>
                 </div>
@@ -127,10 +123,11 @@
                         <div class="partition-row">
                             <div class="partition-id">P@(partition.PartitionId)</div>
                             <div class="partition-metrics">
-                                <span>Queued <strong>@FormatCount(partition.Depth)</strong></span>
-                                <span>In <strong>@FormatRate(partition.IngressRate)</strong></span>
-                                <span>Out <strong>@FormatRate(partition.EgressRate)</strong></span>
-                                <span>Flight <strong>@FormatCount(partition.Unacked)</strong></span>
+                                <div class="metric-row">
+                                    <span>In <strong>@FormatRate(partition.IngressRate)</strong></span>
+                                    <span>Out <strong>@FormatRate(partition.EgressRate)</strong></span>
+                                </div>
+                                <span class="metric-queued">Queued <strong>@FormatCount(partition.Depth)</strong></span>
                             </div>
                             <div class="partition-owner">
                                 @if (!string.IsNullOrWhiteSpace(partition.AssignedConsumer))

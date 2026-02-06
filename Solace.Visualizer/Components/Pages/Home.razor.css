@@ -284,11 +284,20 @@
 
 .partition-metrics {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
-    gap: 0.4rem 0.6rem;
+    gap: 0.25rem;
     font-size: 0.74rem;
     color: #365a6c;
     white-space: nowrap;
+}
+
+.partition-metrics .metric-row {
+    display: flex;
+    gap: 0.6rem;
+}
+
+.partition-metrics .metric-queued {
+    display: inline-flex;
+    gap: 0.25rem;
 }
 
 .partition-metrics strong {

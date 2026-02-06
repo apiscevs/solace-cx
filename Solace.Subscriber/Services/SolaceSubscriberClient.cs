@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Threading;
 using System.Text.Json;
 using System.Text;
 using Microsoft.Extensions.Options;
@@ -42,6 +43,7 @@ public sealed class SolaceSubscriberClient(
     private long _ackCount;
     private long _ackSnapshot;
     private DateTimeOffset _lastStatsAt = DateTimeOffset.UtcNow;
+    private int _ackDelayMs;
 
     public event Action? ConnectionChanged;
 
@@ -65,6 +67,12 @@ public sealed class SolaceSubscriberClient(
     public SubscriberReceiveMode ActiveReceiveMode => _activeReceiveMode;
 
     public string? ActiveQueueName => _activeQueueName;
+
+    public int AckDelayMs
+    {
+        get => Volatile.Read(ref _ackDelayMs);
+        set => Volatile.Write(ref _ackDelayMs, Math.Clamp(value, 0, 60_000));
+    }
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -474,6 +482,11 @@ public sealed class SolaceSubscriberClient(
         try
         {
             var payload = ExtractPayload(args.Message);
+            var ackDelayMs = AckDelayMs;
+            if (ackDelayMs > 0)
+            {
+                Thread.Sleep(ackDelayMs);
+            }
             var messageId = args.Message.ADMessageId;
             var ackResult = sourceFlow?.Ack(messageId) ?? ReturnCode.SOLCLIENT_FAIL;
             var ackSuccess = ackResult == ReturnCode.SOLCLIENT_OK;

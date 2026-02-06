@@ -71,6 +71,14 @@
                     }
                 }
 
+                @if (IsDurableQueueMode)
+                {
+                    <label>
+                        Ack delay (ms)
+                        <input type="number" min="0" max="60000" step="100" @bind="AckDelayMs" />
+                    </label>
+                }
+
                 <label>
                     Broker URL
                     <input value="@SubscriberClient.Options.Host" readonly />
@@ -153,6 +161,11 @@
     private bool CanConnect => !_isConnectionBusy && !Connection.IsConnected && (!IsDurableQueueMode || HasValidQueueSelection);
     private bool CanDisconnect => !_isConnectionBusy && Connection.IsConnected;
     private bool CanSimulateLoss => !_isConnectionBusy && Connection.IsConnected;
+    private int AckDelayMs
+    {
+        get => SubscriberClient.AckDelayMs;
+        set => SubscriberClient.AckDelayMs = value;
+    }
 
     protected override async Task OnInitializedAsync()
     {

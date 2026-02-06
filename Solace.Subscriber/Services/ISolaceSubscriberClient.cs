@@ -25,6 +25,8 @@ public interface ISolaceSubscriberClient
 
     string? ActiveQueueName { get; }
 
+    int AckDelayMs { get; set; }
+
     Task<bool> ConnectAsync(SubscriberReceiveMode mode, string? queueName, CancellationToken cancellationToken = default);
 
     Task<bool> DisconnectAsync(CancellationToken cancellationToken = default);
