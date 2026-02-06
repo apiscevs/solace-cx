@@ -66,11 +66,12 @@ public sealed class VisualizerDataService(
         int? knownPartitionCount,
         CancellationToken cancellationToken = default)
     {
-        var queues = await _monitorClient.GetQueuesAsync(cancellationToken);
+        var queueSnapshots = await _monitorClient.GetQueuesAsync(cancellationToken);
         var flows = await _monitorClient.GetQueueTxFlowsAsync(queueName, cancellationToken);
 
-        var parentQueue = queues.FirstOrDefault(queue =>
-            string.Equals(GetString(queue, "queueName"), queueName, StringComparison.OrdinalIgnoreCase));
+        var parentSnapshot = queueSnapshots.FirstOrDefault(snapshot =>
+            string.Equals(GetString(snapshot.Queue, "queueName"), queueName, StringComparison.OrdinalIgnoreCase));
+        var parentQueue = parentSnapshot?.Queue ?? default;
 
         var partitionCount = knownPartitionCount
             ?? GetInt(parentQueue, "partitionCount")
@@ -78,9 +79,9 @@ public sealed class VisualizerDataService(
 
         var partitionMetrics = new Dictionary<int, PartitionMetrics>();
         var partitionAssignments = new Dictionary<int, string>();
-        foreach (var queue in queues)
+        foreach (var snapshot in queueSnapshots)
         {
-            if (TryGetPartitionEntry(queue, queueName, out var partitionId, out var owner, out var metrics))
+            if (TryGetPartitionEntry(snapshot.Queue, queueName, snapshot.QueuedMessageCount, out var partitionId, out var owner, out var metrics))
             {
                 partitionMetrics[partitionId] = metrics;
                 if (!string.IsNullOrWhiteSpace(owner) && !partitionAssignments.ContainsKey(partitionId))
@@ -90,13 +91,17 @@ public sealed class VisualizerDataService(
             }
         }
 
-        var parentDepth = GetDepth(parentQueue);
-        if (parentDepth is null && partitionMetrics.Count > 0)
+        var parentDepth = GetDepth(parentQueue, parentSnapshot?.QueuedMessageCount);
+        if ((parentDepth is null || parentDepth == 0) && partitionMetrics.Count > 0)
         {
             var hasDepth = partitionMetrics.Values.Any(metrics => metrics.Depth is not null);
             if (hasDepth)
             {
-                parentDepth = partitionMetrics.Values.Sum(metrics => metrics.Depth ?? 0);
+                var summedDepth = partitionMetrics.Values.Sum(metrics => metrics.Depth ?? 0);
+                if (parentDepth is null || summedDepth > 0)
+                {
+                    parentDepth = summedDepth;
+                }
             }
         }
 
@@ -256,6 +261,7 @@ public sealed class VisualizerDataService(
     private static bool TryGetPartitionEntry(
         JsonElement queue,
         string parentQueueName,
+        long? queuedMessageCount,
         out int partitionId,
         out string? assignedConsumer,
         out PartitionMetrics metrics)
@@ -280,7 +286,7 @@ public sealed class VisualizerDataService(
         {
             assignedConsumer = GetString(queue, PartitionClientFields);
             metrics = new PartitionMetrics(
-                Depth: GetDepth(queue),
+                Depth: GetDepth(queue, queuedMessageCount),
                 Unacked: GetUnacked(queue),
                 IngressRate: GetDouble(queue, IngressRateFields),
                 EgressRate: GetDouble(queue, EgressRateFields));
@@ -487,10 +493,10 @@ public sealed class VisualizerDataService(
         return null;
     }
 
-    private static long? GetDepth(JsonElement element)
+    private static long? GetDepth(JsonElement element, long? queuedMessageCount)
     {
-        return GetNestedLong(element, "msgs", "count")
-            ?? GetLong(element, "spooledMsgCount");
+        return queuedMessageCount
+            ?? GetNestedLong(element, "msgs", "count");
     }
 
     private static long? GetUnacked(JsonElement element)
