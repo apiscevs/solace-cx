@@ -5,4 +5,5 @@
   <Project Path="Solace.ServiceDefaults/Solace.ServiceDefaults.csproj" />
   <Project Path="Solace.Shared/Solace.Shared.csproj" />
   <Project Path="Solace.Subscriber/Solace.Subscriber.csproj" />
+  <Project Path="Solace.Visualizer/Solace.Visualizer.csproj" />
 </Solution>

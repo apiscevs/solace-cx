@@ -4,6 +4,7 @@
     <ProjectReference Include="..\Solace.Admin\Solace.Admin.csproj" />
     <ProjectReference Include="..\Solace.Publisher\Solace.Publisher.csproj" />
     <ProjectReference Include="..\Solace.Subscriber\Solace.Subscriber.csproj" />
+    <ProjectReference Include="..\Solace.Visualizer\Solace.Visualizer.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

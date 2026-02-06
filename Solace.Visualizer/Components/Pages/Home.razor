@@ -1,0 +1,455 @@
+@page "/"
+@implements IAsyncDisposable
+@using Solace.Shared.Management
+@using Solace.Visualizer.Services
+@inject VisualizerDataService VisualizerData
+@inject Microsoft.Extensions.Options.IOptions<SolaceSempOptions> SempOptions
+
+<PageTitle>Solace Visualizer</PageTitle>
+
+<div class="visualizer-page">
+    <header class="hero">
+        <p class="kicker">Solace PubSub+ / Visualizer</p>
+        <div class="hero-row">
+            <div class="title-block">
+                <h1>Partition Flow Visualizer</h1>
+                <p>See how partitions bind to consumers in real time, powered by SEMP monitor data.</p>
+            </div>
+            <div class="control-block">
+                <label>
+                    Queue
+                    <select @bind="_selectedQueue" @bind:after="OnQueueChanged" disabled="@(_queues.Count == 0 || _isLoading)">
+                        @if (_queues.Count == 0)
+                        {
+                            <option value="">No partitioned queues found</option>
+                        }
+                        else
+                        {
+                            @foreach (var queue in _queues)
+                            {
+                                <option value="@queue.QueueName">@queue.QueueName</option>
+                            }
+                        }
+                    </select>
+                </label>
+                <label>
+                    Update rate
+                    <select @bind="_refreshSeconds" @bind:after="OnRefreshRateChanged">
+                        @foreach (var option in RefreshOptions)
+                        {
+                            <option value="@option">@option s</option>
+                        }
+                    </select>
+                </label>
+                <div class="toggle-row">
+                    <input id="auto-refresh" type="checkbox" checked="@_autoRefresh" @onchange="OnAutoRefreshChanged" />
+                    <label for="auto-refresh">Auto refresh</label>
+                </div>
+                <button type="button" class="action" @onclick="RefreshAsync" disabled="@_isLoading">
+                    @(_isLoading ? "Refreshing..." : "Refresh now")
+                </button>
+            </div>
+        </div>
+        <div class="status-strip">
+            <div>
+                <span>SEMP host</span>
+                <strong>@SempHostLabel</strong>
+            </div>
+            <div>
+                <span>VPN</span>
+                <strong>@VpnLabel</strong>
+            </div>
+            <div>
+                <span>Last update</span>
+                <strong>@LastUpdatedLabel</strong>
+            </div>
+        </div>
+        @if (!string.IsNullOrWhiteSpace(_error))
+        {
+            <div class="alert">@_error</div>
+        }
+    </header>
+
+    <section class="canvas" style="--canvas-height:@($"{_canvasHeight}px")">
+        <div class="column publisher">
+            <div class="card accent">
+                <p class="card-kicker">Publisher</p>
+                <h2>Ingress Pulse</h2>
+                <p class="card-subtitle">Queue ingress + egress rates</p>
+                <div class="metric-grid">
+                    <div>
+                        <span>Ingress</span>
+                        <strong>@FormatRate(_snapshot?.IngressRate)</strong>
+                    </div>
+                    <div>
+                        <span>Egress</span>
+                        <strong>@FormatRate(_snapshot?.EgressRate)</strong>
+                    </div>
+                    <div>
+                        <span>Depth</span>
+                        <strong>@FormatCount(_snapshot?.Depth)</strong>
+                    </div>
+                </div>
+            </div>
+            <div class="card ghost">
+                <p class="card-kicker">Queue</p>
+                <h3>@(_snapshot?.QueueName ?? "Select a partitioned queue")</h3>
+                <p class="card-subtitle">Partitions: @(_snapshot is null ? "n/a" : _snapshot.PartitionCount.ToString())</p>
+            </div>
+        </div>
+
+        <div class="column queue">
+            <div class="stack-header">
+                <h3>Partition Stack</h3>
+                <p>Depth, ingress, and binding state per partition.</p>
+            </div>
+            <div class="partition-stack">
+                @if (_snapshot is null)
+                {
+                    <div class="placeholder">Waiting for data...</div>
+                }
+                else if (_snapshot.Partitions.Count == 0)
+                {
+                    <div class="placeholder">No partitions found for this queue.</div>
+                }
+                else
+                {
+                    @foreach (var partition in _snapshot.Partitions)
+                    {
+                        <div class="partition-row">
+                            <div class="partition-id">P@(partition.PartitionId)</div>
+                            <div class="partition-metrics">
+                                <span>Depth <strong>@FormatCount(partition.Depth)</strong></span>
+                                <span>In <strong>@FormatRate(partition.IngressRate)</strong></span>
+                                <span>Out <strong>@FormatRate(partition.EgressRate)</strong></span>
+                            </div>
+                            <div class="partition-owner">
+                                @if (!string.IsNullOrWhiteSpace(partition.AssignedConsumer))
+                                {
+                                    <span class="pill">@partition.AssignedConsumer</span>
+                                }
+                                else
+                                {
+                                    <span class="pill muted">Unbound</span>
+                                }
+                            </div>
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+
+        <div class="column consumers">
+            <div class="stack-header">
+                <h3>Consumers</h3>
+                <p>Active flows and their partition affinity.</p>
+            </div>
+            <div class="consumer-stack">
+                @if (_snapshot is null)
+                {
+                    <div class="placeholder">Waiting for consumer flows...</div>
+                }
+                else if (_snapshot.Consumers.Count == 0)
+                {
+                    <div class="placeholder">No consumer flows reported.</div>
+                }
+                else
+                {
+                    @foreach (var consumer in _snapshot.Consumers)
+                    {
+                        <div class="consumer-row">
+                            <div>
+                                <p class="consumer-name">@consumer.ClientName</p>
+                                <p class="consumer-state">@consumer.State</p>
+                            </div>
+                            <div class="consumer-metrics">
+                                <span>@FormatRate(consumer.MsgRate)</span>
+                                <em>msg/s</em>
+                            </div>
+                            <div class="consumer-tags">
+                                @if (consumer.AssignedPartitions.Count == 0)
+                                {
+                                    <span class="pill muted">no partition</span>
+                                }
+                                else
+                                {
+                                    @foreach (var id in consumer.AssignedPartitions)
+                                    {
+                                        <span class="pill">P@(id)</span>
+                                    }
+                                }
+                            </div>
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+
+        <svg class="flow-lines" viewBox="0 0 1000 @_canvasHeight" preserveAspectRatio="none" aria-hidden="true">
+            @foreach (var line in _lines)
+            {
+                <line x1="@line.StartX" y1="@line.StartY" x2="@line.EndX" y2="@line.EndY" stroke="@line.Color" stroke-width="2" stroke-linecap="round" />
+                <circle cx="@line.StartX" cy="@line.StartY" r="3.5" fill="@line.Color" />
+                <circle cx="@line.EndX" cy="@line.EndY" r="3.5" fill="@line.Color" />
+            }
+        </svg>
+    </section>
+
+    <section class="footnote">
+        <p>Lines indicate current partition-to-consumer bindings inferred from SEMP monitor data. Distribution changes as flows rebalance.</p>
+    </section>
+</div>
+
+@code {
+    private static readonly int[] RefreshOptions = [1, 2, 5, 10];
+    private static readonly string[] LinePalette =
+    [
+        "#05b2b0",
+        "#f39b56",
+        "#7a95e5",
+        "#e65f5c",
+        "#31b28f",
+        "#9dbf5a"
+    ];
+
+    private const int RowHeight = 64;
+    private const int RowGap = 12;
+    private const int HeaderOffset = 88;
+    private const int CanvasWidth = 1000;
+    private const int PartitionLineX = 520;
+    private const int ConsumerLineX = 900;
+
+    private readonly SemaphoreSlim _refreshGate = new(1, 1);
+    private IReadOnlyList<SolaceQueueInfo> _queues = [];
+    private VisualizerSnapshot? _snapshot;
+    private string _selectedQueue = string.Empty;
+    private string? _error;
+    private int _refreshSeconds = 1;
+    private bool _autoRefresh = true;
+    private bool _isLoading;
+    private PeriodicTimer? _timer;
+    private CancellationTokenSource? _pollCts;
+    private int _canvasHeight = 420;
+    private IReadOnlyList<FlowLine> _lines = [];
+    private DateTimeOffset? _lastUpdated;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadQueuesAsync();
+        await StartPollingAsync();
+    }
+
+    private async Task LoadQueuesAsync()
+    {
+        try
+        {
+            _queues = await VisualizerData.GetPartitionedQueuesAsync();
+            if (_queues.Count > 0)
+            {
+                _selectedQueue = _queues[0].QueueName;
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task StartPollingAsync()
+    {
+        StopPolling();
+
+        _pollCts = new CancellationTokenSource();
+        var token = _pollCts.Token;
+
+        if (!_autoRefresh)
+        {
+            await RefreshAsync();
+            return;
+        }
+
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(_refreshSeconds));
+
+        _ = Task.Run(async () =>
+        {
+            await RefreshAsync();
+            while (await _timer.WaitForNextTickAsync(token))
+            {
+                await RefreshAsync();
+            }
+        }, token);
+    }
+
+    private void StopPolling()
+    {
+        _pollCts?.Cancel();
+        _pollCts?.Dispose();
+        _pollCts = null;
+        _timer?.Dispose();
+        _timer = null;
+    }
+
+    private async Task OnQueueChanged()
+    {
+        await RefreshAsync();
+    }
+
+    private async Task OnRefreshRateChanged()
+    {
+        if (_autoRefresh)
+        {
+            await StartPollingAsync();
+        }
+    }
+
+    private async Task OnAutoRefreshChanged(ChangeEventArgs args)
+    {
+        _autoRefresh = args.Value is true;
+        if (_autoRefresh)
+        {
+            await StartPollingAsync();
+        }
+        else
+        {
+            StopPolling();
+        }
+    }
+
+    private async Task RefreshAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_selectedQueue))
+        {
+            return;
+        }
+
+        if (!await _refreshGate.WaitAsync(0))
+        {
+            return;
+        }
+
+        _isLoading = true;
+        try
+        {
+            var partitionCount = SelectedQueueInfo?.PartitionCount;
+            var snapshot = await VisualizerData.GetSnapshotAsync(_selectedQueue, partitionCount, _pollCts?.Token ?? default);
+            _snapshot = snapshot;
+            _error = snapshot.Warning;
+            _lastUpdated = snapshot.CapturedAtUtc;
+            UpdateLayout(snapshot);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _isLoading = false;
+            _refreshGate.Release();
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void UpdateLayout(VisualizerSnapshot snapshot)
+    {
+        var rowCount = Math.Max(snapshot.Partitions.Count, snapshot.Consumers.Count);
+        var rowSpan = RowHeight + RowGap;
+        _canvasHeight = Math.Max(380, HeaderOffset + (rowCount * rowSpan) + 120);
+        _lines = BuildLines(snapshot);
+    }
+
+    private IReadOnlyList<FlowLine> BuildLines(VisualizerSnapshot snapshot)
+    {
+        if (snapshot.Partitions.Count == 0 || snapshot.Consumers.Count == 0)
+        {
+            return [];
+        }
+
+        var partitionIndex = snapshot.Partitions
+            .Select((partition, index) => (partition.PartitionId, Index: index))
+            .ToDictionary(entry => entry.PartitionId, entry => entry.Index);
+
+        var lines = new List<FlowLine>();
+        for (var consumerIndex = 0; consumerIndex < snapshot.Consumers.Count; consumerIndex++)
+        {
+            var consumer = snapshot.Consumers[consumerIndex];
+            foreach (var partitionId in consumer.AssignedPartitions)
+            {
+                if (!partitionIndex.TryGetValue(partitionId, out var partIndex))
+                {
+                    continue;
+                }
+
+                var yStart = HeaderOffset + (partIndex * (RowHeight + RowGap)) + (RowHeight / 2.0);
+                var yEnd = HeaderOffset + (consumerIndex * (RowHeight + RowGap)) + (RowHeight / 2.0);
+                var color = LinePalette[consumerIndex % LinePalette.Length];
+
+                lines.Add(new FlowLine(PartitionLineX, yStart, ConsumerLineX, yEnd, color));
+            }
+        }
+
+        return lines;
+    }
+
+    private SolaceQueueInfo? SelectedQueueInfo => _queues.FirstOrDefault(queue => queue.QueueName == _selectedQueue);
+
+    private string LastUpdatedLabel =>
+        _lastUpdated is null ? "Waiting..." : _lastUpdated.Value.ToLocalTime().ToString("HH:mm:ss");
+
+    private string VpnLabel =>
+        string.IsNullOrWhiteSpace(SempOptions.Value.VpnName) ? "Not configured" : SempOptions.Value.VpnName;
+
+    private string SempHostLabel
+    {
+        get
+        {
+            var baseUrl = SempOptions.Value.BaseUrl;
+            if (Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri))
+            {
+                return $"{uri.Host}:{uri.Port}";
+            }
+
+            return string.IsNullOrWhiteSpace(baseUrl) ? "Not configured" : baseUrl;
+        }
+    }
+
+    private static string FormatRate(double? rate)
+    {
+        if (rate is null)
+        {
+            return "n/a";
+        }
+
+        return rate.Value >= 1000
+            ? $"{rate.Value / 1000:0.0}k"
+            : $"{rate.Value:0.0}";
+    }
+
+    private static string FormatCount(long? count)
+    {
+        if (count is null)
+        {
+            return "n/a";
+        }
+
+        if (count.Value >= 1_000_000)
+        {
+            return $"{count.Value / 1_000_000d:0.0}M";
+        }
+
+        if (count.Value >= 10_000)
+        {
+            return $"{count.Value / 1_000d:0.0}k";
+        }
+
+        return count.Value.ToString("0");
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        StopPolling();
+        _refreshGate.Dispose();
+        await Task.CompletedTask;
+    }
+
+    private sealed record FlowLine(double StartX, double StartY, double EndX, double EndY, string Color);
+}

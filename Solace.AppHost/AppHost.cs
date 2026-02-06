@@ -3,6 +3,9 @@ var builder = DistributedApplication.CreateBuilder(args);
 builder.AddProject<Projects.Solace_Admin>("admin")
     .WithExternalHttpEndpoints();
 
+builder.AddProject<Projects.Solace_Visualizer>("visualizer")
+    .WithExternalHttpEndpoints();
+
 builder.AddProject<Projects.Solace_Publisher>("publisher")
     .WithExternalHttpEndpoints();
 

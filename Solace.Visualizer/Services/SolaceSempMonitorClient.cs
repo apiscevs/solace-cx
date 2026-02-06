@@ -3,10 +3,11 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
+using Solace.Shared.Management;
 
-namespace Solace.Shared.Management;
+namespace Solace.Visualizer.Services;
 
-public sealed class SolaceQueueCatalogClient(HttpClient httpClient, IOptions<SolaceSempOptions> options) : ISolaceQueueCatalogClient
+public sealed class SolaceSempMonitorClient(HttpClient httpClient, IOptions<SolaceSempOptions> options) : ISolaceSempMonitorClient
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -15,16 +16,24 @@ public sealed class SolaceQueueCatalogClient(HttpClient httpClient, IOptions<Sol
     private readonly object _configurationSync = new();
     private bool _isConfigured;
 
-    public async Task<IReadOnlyList<SolaceQueueInfo>> GetQueuesAsync(CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<JsonElement>> GetQueuesAsync(CancellationToken cancellationToken = default)
     {
         EnsureClientConfigured();
 
         var vpnName = Uri.EscapeDataString(_options.VpnName);
-        var response = await SendAsync<SempListResponse<SolaceQueueInfo>>($"msgVpns/{vpnName}/queues?count=200", cancellationToken);
-        return response.Data;
+        return await SendAsync($"msgVpns/{vpnName}/queues?count=200", cancellationToken);
     }
 
-    private async Task<T> SendAsync<T>(string relativePath, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<JsonElement>> GetQueueTxFlowsAsync(string queueName, CancellationToken cancellationToken = default)
+    {
+        EnsureClientConfigured();
+
+        var vpnName = Uri.EscapeDataString(_options.VpnName);
+        var escapedQueueName = Uri.EscapeDataString(queueName);
+        return await SendAsync($"msgVpns/{vpnName}/queues/{escapedQueueName}/txFlows?count=200", cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<JsonElement>> SendAsync(string relativePath, CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, relativePath);
         using var response = await _httpClient.SendAsync(request, cancellationToken);
@@ -36,8 +45,18 @@ public sealed class SolaceQueueCatalogClient(HttpClient httpClient, IOptions<Sol
             throw new InvalidOperationException($"{(int)response.StatusCode} {response.StatusCode}: {details}");
         }
 
-        var payload = await response.Content.ReadFromJsonAsync<T>(JsonOptions, cancellationToken);
-        return payload ?? throw new InvalidOperationException("SEMP returned an empty payload.");
+        using var document = await response.Content.ReadFromJsonAsync<JsonDocument>(JsonOptions, cancellationToken);
+        if (document is null)
+        {
+            return [];
+        }
+
+        if (!document.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        return data.EnumerateArray().Select(item => item.Clone()).ToArray();
     }
 
     private void EnsureClientConfigured()
@@ -82,7 +101,7 @@ public sealed class SolaceQueueCatalogClient(HttpClient httpClient, IOptions<Sol
 
         var builder = new UriBuilder(uri)
         {
-            Path = "/SEMP/v2/config/",
+            Path = "/SEMP/v2/monitor/",
             Query = string.Empty,
             Fragment = string.Empty
         };

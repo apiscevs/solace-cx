@@ -1,0 +1,25 @@
+.app-shell {
+    min-height: 100vh;
+    padding: clamp(1rem, 1.5vw, 2rem);
+}
+
+#blazor-error-ui {
+    color-scheme: light only;
+    background: #ffe5cc;
+    border-top: 2px solid #e9721e;
+    bottom: 0;
+    box-sizing: border-box;
+    display: none;
+    left: 0;
+    padding: 0.8rem 1.2rem;
+    position: fixed;
+    width: 100%;
+    z-index: 2000;
+}
+
+#blazor-error-ui .dismiss {
+    cursor: pointer;
+    position: absolute;
+    right: 0.8rem;
+    top: 0.5rem;
+}
